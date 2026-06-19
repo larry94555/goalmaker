@@ -1,0 +1,4 @@
+target/
+llama-server.log
+.idea/
+*.iml
