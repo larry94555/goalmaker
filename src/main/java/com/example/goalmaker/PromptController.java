@@ -12,9 +12,11 @@ import java.util.Map;
 @RestController
 public class PromptController {
     private final LlamaClient llama;
+    private final Intermediary intermediary;
 
-    public PromptController(LlamaClient llama) {
+    public PromptController(LlamaClient llama, Intermediary intermediary) {
         this.llama = llama;
+        this.intermediary = intermediary;
     }
 
     @PostMapping("/prompt")
@@ -22,6 +24,7 @@ public class PromptController {
         if (request.prompt() == null || request.prompt().isBlank()) {
             throw new IllegalArgumentException("prompt is required");
         }
+        intermediary.categorize(request.prompt());
         return Map.of("response", llama.prompt(request.prompt()));
     }
 
