@@ -30,10 +30,14 @@ public class LlamaClient {
     }
 
     public String prompt(String text) throws Exception {
+        return complete(List.of(Map.of("role", "user", "content", text)), maxTokens);
+    }
+
+    String complete(List<Map<String, Object>> messages, int responseTokens) throws Exception {
         Map<String, Object> body = Map.of(
                 "model", model,
-                "messages", List.of(Map.of("role", "user", "content", text)),
-                "max_tokens", maxTokens,
+                "messages", messages,
+                "max_tokens", responseTokens,
                 "cache_prompt", cachePrompt,
                 "stream", false);
         HttpRequest request = HttpRequest.newBuilder()
