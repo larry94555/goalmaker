@@ -41,14 +41,16 @@ class IntermediaryTest {
                 return switch (calls.getAndIncrement()) {
                     case 0 -> "request";
                     case 1 -> "goal: request-action, request-info";
-                    default -> "singular-no-monitoring";
+                    case 2 -> "singular-no-monitoring";
+                    default -> "completion-criteria-clarity:: fully clear\n"
+                            + "completion-criteria: The requested information is returned.";
                 };
             }
         };
         Intermediary intermediary = new Intermediary(llama);
 
         assertEquals("request", intermediary.categorize("What is the capital of France?"));
-        assertEquals(3, calls.get());
+        assertEquals(4, calls.get());
     }
 
     @Test
@@ -63,7 +65,12 @@ class IntermediaryTest {
         LlamaClient llama = new LlamaClient(new ObjectMapper()) {
             @Override
             String complete(List<Map<String, Object>> messages, int responseTokens) {
-                return calls.getAndIncrement() == 0 ? "request" : "request-info";
+                return switch (calls.getAndIncrement()) {
+                    case 0 -> "request";
+                    case 1 -> "request-info";
+                    default -> "completion-criteria-clarity:: fully clear\n"
+                            + "completion-criteria: The capital of France is returned.";
+                };
             }
         };
         Logger logger = (Logger) LoggerFactory.getLogger(Intermediary.class);
@@ -81,6 +88,10 @@ class IntermediaryTest {
                 message.equals("[intermediary] category=request goal: request-info "
                         + "management: singular-no-monitoring "
                         + "prompt=What is the capital of France?")));
+        assertTrue(logs.list.stream().map(ILoggingEvent::getFormattedMessage).anyMatch(message ->
+                message.equals("[intermediary] completion-criteria-clarity:: fully clear "
+                        + "completion-criteria: The capital of France is returned. "
+                        + "prompt=What is the capital of France?")));
     }
 
     @Test
@@ -92,7 +103,9 @@ class IntermediaryTest {
                 return switch (calls.getAndIncrement()) {
                     case 0 -> "request";
                     case 1 -> "request-state, request-action";
-                    default -> "ongoing-monitoring-within-bounds";
+                    case 2 -> "ongoing-monitoring-within-bounds";
+                    default -> "completion-criteria-clarity:: fully clear\n"
+                            + "completion-criteria: Monitoring continues through Friday.";
                 };
             }
         };
@@ -108,7 +121,7 @@ class IntermediaryTest {
             logger.detachAppender(logs);
         }
 
-        assertEquals(3, calls.get());
+        assertEquals(4, calls.get());
         assertTrue(logs.list.stream().map(ILoggingEvent::getFormattedMessage).anyMatch(message ->
                 message.contains("category=request goal: request-state, request-action "
                         + "management: ongoing-monitoring-within-bounds")));
@@ -129,6 +142,107 @@ class IntermediaryTest {
     }
 
     @Test
+    void parsesClearCompletionCriteria() {
+        Intermediary.CompletionAssessment assessment = Intermediary.parseCompletionAssessment("""
+                completion-criteria-clarity:: fully clear
+                completion-criteria-proposal: The requested file exists and the build succeeds.
+                completion-criteria-open-issues: NONE
+                """);
+
+        assertTrue(assessment.fullyClear());
+        assertEquals("The requested file exists and the build succeeds.", assessment.detail());
+    }
+
+    @Test
+    void parsesCompletionCriteriaOpenIssues() {
+        Intermediary.CompletionAssessment assessment = Intermediary.parseCompletionAssessment("""
+                completion-criteria-clarity:: not fully clear
+                completion-criteria-proposal: NONE
+                completion-criteria-open-issues: Which directory should contain the output? | Must it compile?
+                """);
+
+        assertTrue(!assessment.fullyClear());
+        assertEquals("Which directory should contain the output? | Must it compile? "
+                + "The answers will allow a concrete completion criterion to be proposed.", assessment.detail());
+    }
+
+    @Test
+    void formatsProposedCompletionCriterionAsAConfirmationQuestion() {
+        Intermediary.CompletionAssessment assessment = Intermediary.parseCompletionAssessment("""
+                completion-criteria-clarity:: not fully clear
+                completion-criteria-proposal: A TypeScript equivalent preserves behavior and builds successfully.
+                completion-criteria-open-issues: Which output location and compatibility target should be used?
+                """);
+
+        assertEquals("Will this completion criterion suffice: A TypeScript equivalent preserves behavior "
+                + "and builds successfully? If not, which output location and compatibility target should "
+                + "be used?", assessment.detail());
+    }
+
+    @Test
+    void completionClassifierExcludesResponseTimingAndGuidesOpenQuestions() {
+        List<List<Map<String, Object>>> calls = new java.util.ArrayList<>();
+        LlamaClient llama = new LlamaClient(new ObjectMapper()) {
+            @Override
+            String complete(List<Map<String, Object>> messages, int responseTokens) {
+                calls.add(messages);
+                return switch (calls.size()) {
+                    case 1 -> "request";
+                    case 2 -> "request-info";
+                    default -> "completion-criteria-clarity:: fully clear\n"
+                            + "completion-criteria: The correct capital of France is returned.";
+                };
+            }
+        };
+
+        new Intermediary(llama).categorize("What is the capital of France?");
+
+        String instructions = calls.get(2).get(0).get("content").toString();
+        assertTrue(instructions.contains("Completely ignore time-to-completion"));
+        assertTrue(instructions.contains("Never ask when a response is needed"));
+        assertTrue(instructions.contains("completion-criteria-proposal:"));
+        assertTrue(instructions.contains("specific direct questions"));
+    }
+
+    @Test
+    void secondPassProposesCriteriaForConcreteRequest() {
+        AtomicInteger calls = new AtomicInteger();
+        LlamaClient llama = new LlamaClient(new ObjectMapper()) {
+            @Override
+            String complete(List<Map<String, Object>> messages, int responseTokens) {
+                return switch (calls.getAndIncrement()) {
+                    case 0 -> "request";
+                    case 1 -> "request-action";
+                    case 2 -> "singular-no-monitoring";
+                    case 3 -> "completion-criteria-clarity:: not fully clear\n"
+                            + "completion-criteria-proposal: NONE\n"
+                            + "completion-criteria-open-issues: Which output location should be used?";
+                    default -> "completion-criteria-proposal: A TypeScript equivalent preserves source "
+                            + "behavior and builds successfully.\n"
+                            + "completion-criteria-open-issues: Which output location should be used?";
+                };
+            }
+        };
+        Logger logger = (Logger) LoggerFactory.getLogger(Intermediary.class);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+
+        try {
+            new Intermediary(llama).categorize(
+                    "Create a TypeScript equivalent of the code in C:\\repo");
+        } finally {
+            logger.detachAppender(logs);
+        }
+
+        assertEquals(5, calls.get());
+        assertTrue(logs.list.stream().map(ILoggingEvent::getFormattedMessage).anyMatch(message ->
+                message.contains("Will this completion criterion suffice: A TypeScript equivalent "
+                        + "preserves source behavior and builds successfully? If not, which output "
+                        + "location should be used?")));
+    }
+
+    @Test
     void recurringActionUsesOngoingNoMonitoring() {
         AtomicInteger calls = new AtomicInteger();
         LlamaClient llama = new LlamaClient(new ObjectMapper()) {
@@ -137,7 +251,10 @@ class IntermediaryTest {
                 return switch (calls.getAndIncrement()) {
                     case 0 -> "request";
                     case 1 -> "request-action";
-                    default -> "ongoing-no-monitoring";
+                    case 2 -> "ongoing-no-monitoring";
+                    default -> "completion-criteria-clarity:: not fully clear\n"
+                            + "completion-criteria-proposal: A status report is emailed every Monday.\n"
+                            + "completion-criteria-open-issues: Who receives the report?";
                 };
             }
         };
@@ -152,7 +269,7 @@ class IntermediaryTest {
             logger.detachAppender(logs);
         }
 
-        assertEquals(3, calls.get());
+        assertEquals(4, calls.get());
         assertTrue(logs.list.stream().map(ILoggingEvent::getFormattedMessage).anyMatch(message ->
                 message.contains("goal: request-action management: ongoing-no-monitoring")));
     }
@@ -167,7 +284,12 @@ class IntermediaryTest {
                 return switch (calls.size()) {
                     case 1 -> "request";
                     case 2 -> "request-action";
-                    default -> "singular-no-monitoring";
+                    case 3 -> "singular-no-monitoring";
+                    case 4 -> "completion-criteria-clarity:: not fully clear\n"
+                            + "completion-criteria-proposal: NONE\n"
+                            + "completion-criteria-open-issues: Where should the TypeScript output be written?";
+                    default -> "completion-criteria-proposal: A TypeScript equivalent preserves behavior.\n"
+                            + "completion-criteria-open-issues: Where should it be written?";
                 };
             }
         };
