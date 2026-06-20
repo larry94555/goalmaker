@@ -24,8 +24,9 @@ public class PromptController {
         if (request.prompt() == null || request.prompt().isBlank()) {
             throw new IllegalArgumentException("prompt is required");
         }
-        intermediary.categorize(request.prompt());
-        return Map.of("response", llama.prompt(request.prompt()));
+        Intermediary.IntermediaryResult result = intermediary.intercept(request.prompt());
+        if (!result.proceed()) return Map.of("response", result.response());
+        return Map.of("response", llama.prompt(result.prompt()));
     }
 
     @ResponseStatus(HttpStatus.BAD_REQUEST)

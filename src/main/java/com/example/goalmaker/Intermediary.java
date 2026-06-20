@@ -2,6 +2,14 @@ package com.example.goalmaker;
 
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -29,6 +37,11 @@ public class Intermediary {
             "(?im)^[\\s*-]*completion-criteria-proposal\\s*:\\s*(.+)$");
     private static final Pattern COMPLETION_OPEN_ISSUES = Pattern.compile(
             "(?im)^[\\s*-]*completion-criteria-open-issues\\s*:\\s*(.+)$");
+    private static final Pattern CLARIFICATION_INTENT = Pattern.compile(
+            "\\b(clarification|cancel|move-on|new-request)\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern PLAN_STEP = Pattern.compile("^\\s*(?:\\d+[.)]|[-*])\\s+(.+?)\\s*$");
+    private static final DateTimeFormatter PLAN_FILENAME_TIME =
+            DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss_SSSSSS");
     private static final String DEFAULT_COMPLETION_QUESTION =
             "What objective evidence should determine that this request is complete?";
     private static final String CLASSIFIER_PROMPT = """
@@ -167,14 +180,104 @@ public class Intermediary {
 
             Ignore response time, deadlines, latency, urgency, effort, and estimates. Do not answer the request.
             """;
+    private static final String PLAN_PROMPT = """
+            Create a high-level plan that would satisfy the supplied request and completion criterion if every
+            step succeeds. The first line must be `title: <concise 2 to 6 word goal title>`. Follow it with a
+            numbered list of 2 to 7 concise, outcome-oriented steps. Keep the plan implementation-neutral unless
+            the request specifies technology. Do not execute the request, add commentary, ask questions, or
+            repeat the classification metadata.
+            """;
+    private static final String CLARIFICATION_INTENT_PROMPT = """
+            Classify the user's latest message in the context of a pending unclear request. Choose exactly one:
+
+            clarification: answers a question, supplies a missing detail, or refines the pending request.
+            cancel: explicitly abandons or cancels the pending request.
+            move-on: says to leave the pending request without providing a replacement request.
+            new-request: introduces a different request to handle instead of the pending request.
+
+            Respond with only one lowercase label exactly as written. Do not answer either request.
+            """;
 
     private final LlamaClient llama;
+    private Path goalsDirectory = Path.of("goals");
+    private PendingClarification pending;
 
     public Intermediary(LlamaClient llama) {
         this.llama = llama;
     }
 
+    void setGoalsDirectory(Path goalsDirectory) {
+        this.goalsDirectory = goalsDirectory;
+    }
+
+    public synchronized IntermediaryResult intercept(String prompt) {
+        return pending == null ? processNewRequest(prompt) : continueClarification(prompt);
+    }
+
     public String categorize(String prompt) {
+        return analyzeAndLog(prompt).category();
+    }
+
+    private IntermediaryResult processNewRequest(String prompt) {
+        RequestAssessment assessment = analyzeAndLog(prompt);
+        if (!"request".equals(assessment.category())) return IntermediaryResult.proceed(prompt);
+        if (!assessment.completion().fullyClear()) {
+            pending = new PendingClarification(prompt, List.of(), assessment.completion().detail());
+            log.info("[intermediary] clarification-state=pending questions={}", assessment.completion().detail());
+            return IntermediaryResult.intervene(assessment.completion().detail());
+        }
+        return proceedWithPlan(prompt, assessment);
+    }
+
+    private IntermediaryResult continueClarification(String userMessage) {
+        ClarificationIntent intent = classifyClarificationIntent(pending, userMessage);
+        if (intent == ClarificationIntent.CANCEL) {
+            pending = null;
+            log.info("[intermediary] clarification-state=cancelled");
+            return IntermediaryResult.intervene("The pending request has been cancelled.");
+        }
+        if (intent == ClarificationIntent.MOVE_ON) {
+            pending = null;
+            log.info("[intermediary] clarification-state=closed reason=move-on");
+            return IntermediaryResult.intervene("Okay, moving on from the pending request.");
+        }
+        if (intent == ClarificationIntent.NEW_REQUEST) {
+            pending = null;
+            log.info("[intermediary] clarification-state=replaced");
+            return processNewRequest(userMessage);
+        }
+
+        List<String> answers = new ArrayList<>(pending.answers());
+        answers.add(userMessage);
+        String combined = combinedRequest(pending.originalPrompt(), answers);
+        RequestAssessment assessment = analyzeAndLog(combined);
+        if ("request".equals(assessment.category()) && assessment.completion().fullyClear()) {
+            pending = null;
+            log.info("[intermediary] clarification-state=resolved");
+            return proceedWithPlan(combined, assessment);
+        }
+        String questions = "request".equals(assessment.category())
+                ? assessment.completion().detail() : pending.questions();
+        pending = new PendingClarification(pending.originalPrompt(), List.copyOf(answers), questions);
+        log.info("[intermediary] clarification-state=pending questions={}", questions);
+        return IntermediaryResult.intervene(questions);
+    }
+
+    private IntermediaryResult proceedWithPlan(String prompt, RequestAssessment assessment) {
+        HighLevelPlan plan = createPlan(prompt, assessment);
+        if (plan != null) {
+            log.info("[intermediary] high-level-plan:\n{}", plan.numberedSteps());
+            try {
+                Path saved = savePlan(plan, prompt, assessment);
+                log.info("[intermediary] high-level-plan-file={}", saved.toAbsolutePath());
+            } catch (IOException error) {
+                log.warn("[intermediary] could not save high-level plan", error);
+            }
+        }
+        return IntermediaryResult.proceed(prompt);
+    }
+
+    private RequestAssessment analyzeAndLog(String prompt) {
         String category = "request";
         try {
             String result = llama.complete(List.of(
@@ -202,10 +305,11 @@ public class Intermediary {
                 log.info("[intermediary] completion-criteria-clarity:: not fully clear "
                         + "completion-criteria-open-issues: {} prompt={}", completion.detail(), prompt);
             }
+            return new RequestAssessment(category, goals, management, completion);
         } else {
             log.info("[intermediary] category={} prompt={}", category, prompt);
+            return new RequestAssessment(category, "", "", null);
         }
-        return category;
     }
 
     private String categorizeGoals(String prompt) {
@@ -282,6 +386,130 @@ public class Intermediary {
         return null;
     }
 
+    private HighLevelPlan createPlan(String prompt, RequestAssessment assessment) {
+        try {
+            String result = llama.complete(List.of(
+                    Map.of("role", "system", "content", PLAN_PROMPT),
+                    Map.of("role", "user", "content", "Goal labels: " + assessment.goals()
+                            + "\nManagement: " + assessment.management()
+                            + "\nCompletion criterion: " + assessment.completion().detail()
+                            + "\n<request>" + prompt + "</request>")), 320).trim();
+            HighLevelPlan plan = parsePlan(result, prompt);
+            if (plan != null) return plan;
+            log.warn("[intermediary] high-level plan contained no usable steps: {}", result);
+        } catch (Exception error) {
+            log.warn("[intermediary] high-level plan generation failed; continuing without a plan", error);
+        }
+        return null;
+    }
+
+    private HighLevelPlan parsePlan(String result, String prompt) {
+        String title = "";
+        List<String> steps = new ArrayList<>();
+        for (String line : result.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.toLowerCase(Locale.ROOT).startsWith("title:")) {
+                title = trimmed.substring("title:".length()).trim();
+                continue;
+            }
+            Matcher step = PLAN_STEP.matcher(line);
+            if (step.matches()) steps.add(step.group(1).trim());
+        }
+        if (steps.isEmpty()) return null;
+        if (title.isBlank()) title = deriveTitle(prompt);
+        return new HighLevelPlan(title, List.copyOf(steps));
+    }
+
+    private Path savePlan(HighLevelPlan plan, String prompt, RequestAssessment assessment) throws IOException {
+        Files.createDirectories(goalsDirectory);
+        ZonedDateTime now = ZonedDateTime.now();
+        String filename = "plan_" + filenameTitle(plan.title()) + "_"
+                + PLAN_FILENAME_TIME.format(now) + ".yml";
+        Path target = goalsDirectory.resolve(filename);
+        StringBuilder yaml = new StringBuilder()
+                .append("title: ").append(yamlQuote(plan.title())).append("\n")
+                .append("created_at: ").append(yamlQuote(now.toOffsetDateTime().toString())).append("\n")
+                .append("request: |-\n").append(yamlBlock(prompt, 2))
+                .append("category: request\n")
+                .append("goals:\n");
+        for (String goal : assessment.goals().split("\\s*,\\s*")) {
+            if (!goal.isBlank()) yaml.append("  - ").append(yamlQuote(goal)).append("\n");
+        }
+        yaml.append("management: ").append(yamlQuote(assessment.management())).append("\n")
+                .append("completion_criteria: ")
+                .append(yamlQuote(assessment.completion().detail())).append("\n")
+                .append("steps:\n");
+        for (String step : plan.steps()) yaml.append("  - ").append(yamlQuote(step)).append("\n");
+        return Files.writeString(target, yaml.toString(), StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+    }
+
+    private static String deriveTitle(String prompt) {
+        String normalized = prompt.replaceAll("(?s)^Original request:\\s*", "")
+                .replaceAll("(?s)\\n\\nClarifications supplied.*$", "")
+                .replaceAll("[^A-Za-z0-9]+", " ").trim();
+        if (normalized.isEmpty()) return "goal";
+        String[] words = normalized.split("\\s+");
+        return String.join(" ", java.util.Arrays.copyOf(words, Math.min(words.length, 6)));
+    }
+
+    private static String filenameTitle(String title) {
+        String value = title.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "_")
+                .replaceAll("^_+|_+$", "");
+        if (value.isEmpty()) value = "goal";
+        return value.substring(0, Math.min(value.length(), 60));
+    }
+
+    private static String yamlQuote(String value) {
+        return "'" + value.replace("'", "''").replaceAll("\\R", " ") + "'";
+    }
+
+    private static String yamlBlock(String value, int spaces) {
+        String indent = " ".repeat(spaces);
+        StringBuilder block = new StringBuilder();
+        for (String line : value.split("\\R", -1)) block.append(indent).append(line).append("\n");
+        return block.toString();
+    }
+
+    private ClarificationIntent classifyClarificationIntent(PendingClarification current, String userMessage) {
+        String normalized = userMessage.trim().toLowerCase(Locale.ROOT);
+        if (normalized.matches("^(cancel|cancel it|never mind|nevermind|forget it|stop)([.!])?$")) {
+            return ClarificationIntent.CANCEL;
+        }
+        if (normalized.matches("^(move on|let's move on|lets move on|something else)([.!])?$")) {
+            return ClarificationIntent.MOVE_ON;
+        }
+        try {
+            String result = llama.complete(List.of(
+                    Map.of("role", "system", "content", CLARIFICATION_INTENT_PROMPT),
+                    Map.of("role", "user", "content", "Pending request: " + current.originalPrompt()
+                            + "\nOpen questions: " + current.questions()
+                            + "\nLatest message: " + userMessage)), 12);
+            Matcher matcher = CLARIFICATION_INTENT.matcher(result);
+            if (matcher.find()) {
+                return switch (matcher.group(1).toLowerCase(Locale.ROOT)) {
+                    case "cancel" -> ClarificationIntent.CANCEL;
+                    case "move-on" -> ClarificationIntent.MOVE_ON;
+                    case "new-request" -> ClarificationIntent.NEW_REQUEST;
+                    default -> ClarificationIntent.CLARIFICATION;
+                };
+            }
+            log.warn("[intermediary] clarification intent was invalid; treating as clarification: {}", result);
+        } catch (Exception error) {
+            log.warn("[intermediary] clarification intent failed; treating as clarification", error);
+        }
+        return ClarificationIntent.CLARIFICATION;
+    }
+
+    private static String combinedRequest(String originalPrompt, List<String> answers) {
+        StringBuilder combined = new StringBuilder("Original request:\n").append(originalPrompt)
+                .append("\n\nClarifications supplied by the user:");
+        for (int i = 0; i < answers.size(); i++) {
+            combined.append("\n").append(i + 1).append(". ").append(answers.get(i));
+        }
+        return combined.append("\n\nTreat the original request and clarifications as one request.").toString();
+    }
+
     static String normalizeGoals(String result) {
         String normalized = result == null ? "" : result.toLowerCase(Locale.ROOT);
         return GOAL_TYPES.stream()
@@ -339,6 +567,35 @@ public class Intermediary {
         if (value.isEmpty() || Character.isLowerCase(value.charAt(0))) return value;
         return Character.toLowerCase(value.charAt(0)) + value.substring(1);
     }
+
+    public record IntermediaryResult(boolean proceed, String prompt, String response) {
+        static IntermediaryResult proceed(String prompt) {
+            return new IntermediaryResult(true, prompt, "");
+        }
+
+        static IntermediaryResult intervene(String response) {
+            return new IntermediaryResult(false, "", response);
+        }
+    }
+
+    private record RequestAssessment(
+            String category, String goals, String management, CompletionAssessment completion) {}
+
+    private record PendingClarification(
+            String originalPrompt, List<String> answers, String questions) {}
+
+    private record HighLevelPlan(String title, List<String> steps) {
+        String numberedSteps() {
+            StringBuilder numbered = new StringBuilder();
+            for (int i = 0; i < steps.size(); i++) {
+                if (i > 0) numbered.append("\n");
+                numbered.append(i + 1).append(". ").append(steps.get(i));
+            }
+            return numbered.toString();
+        }
+    }
+
+    private enum ClarificationIntent { CLARIFICATION, CANCEL, MOVE_ON, NEW_REQUEST }
 
     record CompletionAssessment(boolean fullyClear, String detail) {}
 }
