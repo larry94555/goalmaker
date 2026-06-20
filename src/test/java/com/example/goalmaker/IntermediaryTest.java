@@ -38,15 +38,17 @@ class IntermediaryTest {
         LlamaClient llama = new LlamaClient(new ObjectMapper()) {
             @Override
             String complete(List<Map<String, Object>> messages, int responseTokens) {
-                return calls.getAndIncrement() == 0
-                        ? "request"
-                        : "goal: request-action, request-info";
+                return switch (calls.getAndIncrement()) {
+                    case 0 -> "request";
+                    case 1 -> "goal: request-action, request-info";
+                    default -> "singular-no-monitoring";
+                };
             }
         };
         Intermediary intermediary = new Intermediary(llama);
 
         assertEquals("request", intermediary.categorize("What is the capital of France?"));
-        assertEquals(2, calls.get());
+        assertEquals(3, calls.get());
     }
 
     @Test
@@ -77,7 +79,82 @@ class IntermediaryTest {
 
         assertTrue(logs.list.stream().map(ILoggingEvent::getFormattedMessage).anyMatch(message ->
                 message.equals("[intermediary] category=request goal: request-info "
+                        + "management: singular-no-monitoring "
                         + "prompt=What is the capital of France?")));
+    }
+
+    @Test
+    void stateRequestUsesModelSelectedManagementType() {
+        AtomicInteger calls = new AtomicInteger();
+        LlamaClient llama = new LlamaClient(new ObjectMapper()) {
+            @Override
+            String complete(List<Map<String, Object>> messages, int responseTokens) {
+                return switch (calls.getAndIncrement()) {
+                    case 0 -> "request";
+                    case 1 -> "request-state, request-action";
+                    default -> "ongoing-monitoring-within-bounds";
+                };
+            }
+        };
+        Logger logger = (Logger) LoggerFactory.getLogger(Intermediary.class);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+
+        try {
+            new Intermediary(llama).categorize(
+                    "Monitor the service until Friday and restart it whenever it becomes unhealthy");
+        } finally {
+            logger.detachAppender(logs);
+        }
+
+        assertEquals(3, calls.get());
+        assertTrue(logs.list.stream().map(ILoggingEvent::getFormattedMessage).anyMatch(message ->
+                message.contains("category=request goal: request-state, request-action "
+                        + "management: ongoing-monitoring-within-bounds")));
+    }
+
+    @Test
+    void normalizesEveryManagementType() {
+        assertEquals("singular-no-monitoring",
+                Intermediary.normalizeManagement("singular-no-monitoring"));
+        assertEquals("singular-monitoring",
+                Intermediary.normalizeManagement("Type: singular-monitoring"));
+        assertEquals("ongoing-no-monitoring",
+                Intermediary.normalizeManagement("ongoing-no-monitoring"));
+        assertEquals("ongoing-monitoring-within-bounds",
+                Intermediary.normalizeManagement("ONGOING-MONITORING-WITHIN-BOUNDS"));
+        assertEquals("ongoing-monitoring-without-bounds",
+                Intermediary.normalizeManagement("ongoing-monitoring-without-bounds"));
+    }
+
+    @Test
+    void recurringActionUsesOngoingNoMonitoring() {
+        AtomicInteger calls = new AtomicInteger();
+        LlamaClient llama = new LlamaClient(new ObjectMapper()) {
+            @Override
+            String complete(List<Map<String, Object>> messages, int responseTokens) {
+                return switch (calls.getAndIncrement()) {
+                    case 0 -> "request";
+                    case 1 -> "request-action";
+                    default -> "ongoing-no-monitoring";
+                };
+            }
+        };
+        Logger logger = (Logger) LoggerFactory.getLogger(Intermediary.class);
+        ListAppender<ILoggingEvent> logs = new ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+
+        try {
+            new Intermediary(llama).categorize("Email a status report every Monday");
+        } finally {
+            logger.detachAppender(logs);
+        }
+
+        assertEquals(3, calls.get());
+        assertTrue(logs.list.stream().map(ILoggingEvent::getFormattedMessage).anyMatch(message ->
+                message.contains("goal: request-action management: ongoing-no-monitoring")));
     }
 
     @Test
@@ -87,7 +164,11 @@ class IntermediaryTest {
             @Override
             String complete(List<Map<String, Object>> messages, int responseTokens) {
                 calls.add(messages);
-                return calls.size() == 1 ? "request" : "request-action";
+                return switch (calls.size()) {
+                    case 1 -> "request";
+                    case 2 -> "request-action";
+                    default -> "singular-no-monitoring";
+                };
             }
         };
 
