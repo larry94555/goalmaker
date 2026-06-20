@@ -22,9 +22,9 @@ class PromptControllerTest {
         };
         Intermediary intermediary = new Intermediary(llama) {
             @Override
-            public String categorize(String prompt) {
-                calls.add("categorize");
-                return "signal";
+            public IntermediaryResult intercept(String prompt) {
+                calls.add("intercept");
+                return IntermediaryResult.proceed(prompt);
             }
         };
         PromptController controller = new PromptController(llama, intermediary);
@@ -32,6 +32,31 @@ class PromptControllerTest {
         Map<String, String> response = controller.prompt(new PromptController.PromptRequest("Hello"));
 
         assertEquals(Map.of("response", "Unchanged response"), response);
-        assertEquals(List.of("categorize", "prompt"), calls);
+        assertEquals(List.of("intercept", "prompt"), calls);
+    }
+
+    @Test
+    void returnsClarificationWithoutCallingTheMainModel() throws Exception {
+        List<String> calls = new ArrayList<>();
+        LlamaClient llama = new LlamaClient(new ObjectMapper()) {
+            @Override
+            public String prompt(String text) {
+                calls.add("prompt");
+                return "must not be returned";
+            }
+        };
+        Intermediary intermediary = new Intermediary(llama) {
+            @Override
+            public IntermediaryResult intercept(String prompt) {
+                calls.add("intercept");
+                return IntermediaryResult.intervene("Which output directory should be used?");
+            }
+        };
+        PromptController controller = new PromptController(llama, intermediary);
+
+        Map<String, String> response = controller.prompt(new PromptController.PromptRequest("Create it"));
+
+        assertEquals(Map.of("response", "Which output directory should be used?"), response);
+        assertEquals(List.of("intercept"), calls);
     }
 }
