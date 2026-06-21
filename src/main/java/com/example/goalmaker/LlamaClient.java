@@ -2,6 +2,7 @@ package com.example.goalmaker;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -10,6 +11,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -20,26 +23,63 @@ public class LlamaClient {
     @Value("${llama.alias:qwen2.5-3b-instruct}") private String model;
     @Value("${llama.cache-prompt:true}") private boolean cachePrompt;
     @Value("${prompt.max-tokens:1024}") private int maxTokens;
+    @Value("${tools.max-iterations:8}") private int maxToolIterations = 8;
 
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10)).build();
     private final ObjectMapper mapper;
+    private final ToolCatalog tools;
+
+    @Autowired
+    public LlamaClient(ObjectMapper mapper, ToolCatalog tools) {
+        this.mapper = mapper;
+        this.tools = tools;
+    }
 
     public LlamaClient(ObjectMapper mapper) {
-        this.mapper = mapper;
+        this(mapper, null);
     }
 
     public String prompt(String text) throws Exception {
-        return complete(List.of(Map.of("role", "user", "content", text)), maxTokens);
+        List<Map<String, Object>> messages = new ArrayList<>();
+        messages.add(Map.of("role", "user", "content", text));
+        if (tools == null || tools.isEmpty()) return complete(messages, maxTokens);
+
+        List<Map<String, Object>> specifications = tools.specifications();
+        for (int iteration = 0; iteration < Math.max(1, maxToolIterations); iteration++) {
+            JsonNode assistant = send(messages, maxTokens, specifications);
+            JsonNode calls = assistant.path("tool_calls");
+            if (!calls.isArray() || calls.isEmpty()) return assistant.path("content").asText("");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> assistantMessage = mapper.convertValue(assistant, Map.class);
+            messages.add(assistantMessage);
+            for (int index = 0; index < calls.size(); index++) {
+                JsonNode call = calls.get(index);
+                String id = call.path("id").asText("call_" + iteration + "_" + index);
+                String name = call.path("function").path("name").asText();
+                Map<String, Object> arguments = parseArguments(call.path("function").path("arguments"));
+                String result = tools.execute(name, arguments);
+                Map<String, Object> toolMessage = new LinkedHashMap<>();
+                toolMessage.put("role", "tool");
+                toolMessage.put("tool_call_id", id);
+                toolMessage.put("name", name);
+                toolMessage.put("content", result);
+                messages.add(toolMessage);
+            }
+        }
+        throw new IllegalStateException("model exceeded " + maxToolIterations + " tool iterations");
     }
 
     String complete(List<Map<String, Object>> messages, int responseTokens) throws Exception {
-        Map<String, Object> body = Map.of(
-                "model", model,
-                "messages", messages,
-                "max_tokens", responseTokens,
-                "cache_prompt", cachePrompt,
-                "stream", false);
+        JsonNode message = send(messages, responseTokens, List.of());
+        JsonNode content = message.path("content");
+        if (content.isMissingNode()) throw new IllegalStateException("Unexpected llama-server response");
+        return content.asText();
+    }
+
+    private JsonNode send(List<Map<String, Object>> messages, int responseTokens,
+                          List<Map<String, Object>> toolSpecifications) throws Exception {
+        Map<String, Object> body = requestBody(model, messages, responseTokens, cachePrompt, toolSpecifications);
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create("http://" + host + ":" + port + "/v1/chat/completions"))
                 .timeout(Duration.ofMinutes(10))
@@ -51,8 +91,39 @@ public class LlamaClient {
             throw new IllegalStateException("llama-server " + response.statusCode() + ": " + response.body());
         }
         JsonNode root = mapper.readTree(response.body());
-        JsonNode content = root.path("choices").path(0).path("message").path("content");
-        if (content.isMissingNode()) throw new IllegalStateException("Unexpected llama-server response: " + response.body());
-        return content.asText();
+        JsonNode message = root.path("choices").path(0).path("message");
+        if (message.isMissingNode()) {
+            throw new IllegalStateException("Unexpected llama-server response: " + response.body());
+        }
+        return message;
+    }
+
+    static Map<String, Object> requestBody(String model, List<Map<String, Object>> messages,
+                                           int responseTokens, boolean cachePrompt,
+                                           List<Map<String, Object>> toolSpecifications) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", model);
+        body.put("messages", messages);
+        body.put("max_tokens", responseTokens);
+        body.put("cache_prompt", cachePrompt);
+        body.put("stream", false);
+        if (toolSpecifications != null && !toolSpecifications.isEmpty()) {
+            body.put("tools", toolSpecifications);
+            body.put("tool_choice", "auto");
+        }
+        return body;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseArguments(JsonNode arguments) {
+        try {
+            if (arguments.isObject()) return mapper.convertValue(arguments, Map.class);
+            if (arguments.isTextual() && !arguments.asText().isBlank()) {
+                return mapper.readValue(arguments.asText(), Map.class);
+            }
+        } catch (Exception ignored) {
+            // The tool receives an empty object when the model emits malformed arguments.
+        }
+        return Map.of();
     }
 }
