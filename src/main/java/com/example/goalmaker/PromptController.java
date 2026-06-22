@@ -26,7 +26,7 @@ public class PromptController {
         }
         Intermediary.IntermediaryResult result = intermediary.intercept(request.prompt());
         if (!result.proceed()) return Map.of("response", result.response());
-        return Map.of("response", llama.prompt(result.prompt()));
+        return Map.of("response", llama.prompt(result.prompt(), result.requiredTool()));
     }
 
     @ResponseStatus(HttpStatus.BAD_REQUEST)

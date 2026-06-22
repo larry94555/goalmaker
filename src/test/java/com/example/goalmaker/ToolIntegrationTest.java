@@ -87,6 +87,12 @@ class ToolIntegrationTest {
         assertEquals("auto", withTools.get("tool_choice"));
         assertFalse(withoutTools.containsKey("tools"));
         assertFalse(withoutTools.containsKey("tool_choice"));
+
+        Map<String, Object> required = Map.of(
+                "type", "function", "function", Map.of("name", "skill_echo"));
+        Map<String, Object> withRequired = LlamaClient.requestBody(
+                "model", List.of(), 100, true, specifications, required);
+        assertEquals(required, withRequired.get("tool_choice"));
     }
 
     @Test
@@ -156,5 +162,74 @@ class ToolIntegrationTest {
                 .filter(message -> "tool".equals(message.get("role"))).findFirst().orElseThrow();
         assertEquals("call_1", toolMessage.get("tool_call_id"));
         assertTrue(String.valueOf(toolMessage.get("content")).contains("Return a concise summary"));
+    }
+
+    @Test
+    void llamaForcesRequiredSearchThenReturnsToAutomaticToolChoice() throws Exception {
+        HttpServer searchServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        searchServer.createContext("/ddg", exchange -> {
+            byte[] response = """
+                    <html><body><div class='result'>
+                    <a class='result__a' href='https://example.com'>Example</a>
+                    <div class='result__snippet'>Evidence</div></div></body></html>
+                    """.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        searchServer.start();
+        WebSearchToolProvider search = new WebSearchToolProvider(mapper);
+        ReflectionTestUtils.setField(search, "searxngUrl", "");
+        ReflectionTestUtils.setField(search, "duckDuckGoUrl",
+                "http://127.0.0.1:" + searchServer.getAddress().getPort() + "/ddg");
+        ReflectionTestUtils.setField(search, "retryDelayMillis", 0L);
+        ToolCatalog catalog = new ToolCatalog(
+                new SkillToolProvider(mapper), new McpToolProvider(mapper), search, null);
+        catalog.refresh();
+
+        List<Map<String, Object>> requests = new ArrayList<>();
+        HttpServer llamaServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        llamaServer.createContext("/v1/chat/completions", exchange -> {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> request = mapper.readValue(exchange.getRequestBody(), Map.class);
+            requests.add(request);
+            Map<String, Object> message = new LinkedHashMap<>();
+            message.put("role", "assistant");
+            if (requests.size() == 1) {
+                message.put("tool_calls", List.of(Map.of(
+                        "id", "search_1", "type", "function",
+                        "function", Map.of("name", "web_search", "arguments", "{\"query\":\"test\"}"))));
+            } else {
+                message.put("content", "researched answer");
+            }
+            byte[] response = mapper.writeValueAsBytes(Map.of("choices", List.of(Map.of("message", message))));
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        llamaServer.start();
+        try {
+            LlamaClient llama = new LlamaClient(mapper, catalog);
+            ReflectionTestUtils.setField(llama, "host", "127.0.0.1");
+            ReflectionTestUtils.setField(llama, "port", llamaServer.getAddress().getPort());
+            ReflectionTestUtils.setField(llama, "model", "test-model");
+            ReflectionTestUtils.setField(llama, "maxTokens", 100);
+
+            assertEquals("researched answer", llama.prompt("Find the answer", "web_search"));
+        } finally {
+            llamaServer.stop(0);
+            searchServer.stop(0);
+        }
+
+        assertEquals("required", requests.get(0).get("tool_choice"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> firstTools = (List<Map<String, Object>>) requests.get(0).get("tools");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> firstFunction = (Map<String, Object>) firstTools.get(0).get("function");
+        assertEquals(1, firstTools.size());
+        assertEquals("web_search", firstFunction.get("name"));
+        assertEquals("auto", requests.get(1).get("tool_choice"));
     }
 }

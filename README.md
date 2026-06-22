@@ -28,8 +28,8 @@ Each plan is also saved as YAML under `goals` using
 ## Tools
 
 After a request is clear, the intermediary gives the saved plan to the main model. The main model may carry
-out plan steps through the built-in web search, discovered skills, and MCP tools. Classification, clarification, and plan-generation
-calls never receive tools.
+out plan steps through built-in web research, discovered skills, and MCP tools. Classification, clarification,
+and plan-generation calls never receive tools.
 
 Tools are loaded once during application startup. Restart the application after adding or changing a skill,
 an MCP server, or `mcp.json`. Tool calls are bounded by `tools.max-iterations` and each local process call by
@@ -40,17 +40,38 @@ permissions as goalmaker.
 
 ### Web Search
 
-The built-in `web_search` tool is always registered and requires one string argument named `query`. For every
-request classified as `request-info`, the intermediary explicitly directs the main model to call this tool
-before answering.
+The built-in `web_search` and `web_fetch` tools require no API token. Every `request-info` forces `web_search`
+as the first model tool call. The execution prompt then directs the model to fetch promising pages, answer from
+page evidence rather than snippets alone, and cite source URLs.
 
-`web_search` has the same search behavior as `mini`: it queries DuckDuckGo's HTML endpoint, follows redirects,
-and returns up to six ranked results with titles, decoded destination URLs, and snippets. Search results are
-fenced as untrusted external content before being returned to the model, including a warning when common
-prompt-injection language is detected.
+`web_search` prefers the structured JSON API of a local SearXNG instance and falls back to DuckDuckGo HTML when
+SearXNG is unavailable or returns no results. It supports `query`, `max_results`, `language`, `time_range`,
+`page`, `safe_search`, and SearXNG `categories`. Results are deduplicated and returned as JSON with rank,
+provider, engine, title, URL, snippet, optional publication date, retrieval time, and provider diagnostics.
+Transient failures are retried with bounded backoff, oversized responses are rejected, and successful searches
+are cached for five minutes by default.
 
-No API key is required. The endpoint defaults to `https://html.duckduckgo.com/html/` and can be changed with
-`web.search.endpoint` in `application.properties`, primarily for testing or a compatible local proxy.
+Start the included local SearXNG service with Docker:
+
+```bat
+docker compose -f docker-compose.searxng.yml up -d
+```
+
+Its JSON API is bound to `127.0.0.1:8888`; it is not exposed to the network. Replace the placeholder secret in
+`searxng/settings.yml` before changing that binding. If Docker or SearXNG is unavailable, GoalMaker continues
+through DuckDuckGo automatically. See the [SearXNG Search API](https://docs.searxng.org/dev/search_api.html)
+for supported query controls.
+
+`web_fetch` follows at most five redirects, accepts public HTTP(S) pages, limits downloads and returned text,
+and extracts readable article/main content from HTML. It rejects credentials, unsupported content types, and
+URLs resolving to local, private, link-local, or multicast addresses. Each redirect target is validated before
+it is fetched. Keep `web.fetch.allow-private-addresses=false` unless a trusted local integration explicitly
+requires otherwise.
+
+All search and fetched content is fenced as untrusted external data before reaching the model. Common
+prompt-injection phrases receive an additional warning, but the untrusted boundary applies to every result.
+Timeouts, retry limits, cache behavior, provider URLs, response sizes, redirects, and fetch text limits are
+configurable in `application.properties`.
 
 ### Create A Skill
 

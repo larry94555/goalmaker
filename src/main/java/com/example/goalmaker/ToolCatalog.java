@@ -16,23 +16,31 @@ public class ToolCatalog {
     private final SkillToolProvider skills;
     private final McpToolProvider mcp;
     private final WebSearchToolProvider webSearch;
+    private final WebFetchToolProvider webFetch;
     private final Map<String, ToolDefinition> tools = new LinkedHashMap<>();
 
     @Autowired
-    public ToolCatalog(SkillToolProvider skills, McpToolProvider mcp, WebSearchToolProvider webSearch) {
+    public ToolCatalog(SkillToolProvider skills, McpToolProvider mcp, WebSearchToolProvider webSearch,
+                       WebFetchToolProvider webFetch) {
         this.skills = skills;
         this.mcp = mcp;
         this.webSearch = webSearch;
+        this.webFetch = webFetch;
     }
 
     ToolCatalog(SkillToolProvider skills, McpToolProvider mcp) {
-        this(skills, mcp, null);
+        this(skills, mcp, null, null);
+    }
+
+    ToolCatalog(SkillToolProvider skills, McpToolProvider mcp, WebSearchToolProvider webSearch) {
+        this(skills, mcp, webSearch, null);
     }
 
     @PostConstruct
     public synchronized void refresh() {
         tools.clear();
         if (webSearch != null) webSearch.tools().forEach(this::register);
+        if (webFetch != null) webFetch.tools().forEach(this::register);
         skills.tools().forEach(this::register);
         mcp.tools().forEach(this::register);
         log.info("[tools] exposing {} tool(s) to the model", tools.size());
@@ -40,6 +48,10 @@ public class ToolCatalog {
 
     public synchronized boolean isEmpty() {
         return tools.isEmpty();
+    }
+
+    public synchronized boolean contains(String name) {
+        return tools.containsKey(name);
     }
 
     public synchronized List<Map<String, Object>> specifications() {
