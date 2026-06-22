@@ -28,7 +28,7 @@ Each plan is also saved as YAML under `goals` using
 ## Tools
 
 After a request is clear, the intermediary gives the saved plan to the main model. The main model may carry
-out plan steps through discovered skill and MCP tools. Classification, clarification, and plan-generation
+out plan steps through the built-in web search, discovered skills, and MCP tools. Classification, clarification, and plan-generation
 calls never receive tools.
 
 Tools are loaded once during application startup. Restart the application after adding or changing a skill,
@@ -37,6 +37,20 @@ an MCP server, or `mcp.json`. Tool calls are bounded by `tools.max-iterations` a
 
 Only install skills and MCP servers you trust. Their commands run locally with the same operating-system
 permissions as goalmaker.
+
+### Web Search
+
+The built-in `web_search` tool is always registered and requires one string argument named `query`. For every
+request classified as `request-info`, the intermediary explicitly directs the main model to call this tool
+before answering.
+
+`web_search` has the same search behavior as `mini`: it queries DuckDuckGo's HTML endpoint, follows redirects,
+and returns up to six ranked results with titles, decoded destination URLs, and snippets. Search results are
+fenced as untrusted external content before being returned to the model, including a warning when common
+prompt-injection language is detected.
+
+No API key is required. The endpoint defaults to `https://html.duckduckgo.com/html/` and can be changed with
+`web.search.endpoint` in `application.properties`, primarily for testing or a compatible local proxy.
 
 ### Create A Skill
 
@@ -126,4 +140,4 @@ minimal handshake, tool discovery, and tool execution contract. See the
 Available tools are sent to the OpenAI-compatible chat endpoint as function definitions. When the model emits
 `tool_calls`, goalmaker executes each named tool, appends its result as a `tool` message, and asks the model to
 continue. The loop stops when the model returns a normal answer or reaches `tools.max-iterations`. The execution
-prompt explicitly forbids claiming that an action succeeded unless a skill or MCP result confirms it.
+prompt explicitly forbids claiming that an action succeeded unless an available tool result confirms it.

@@ -201,8 +201,27 @@ public class McpToolProvider {
         }
 
         void close() {
-            reader.shutdownNow();
+            try {
+                output.close();
+            } catch (Exception ignored) {
+                // Continue shutdown even when the server already closed its input.
+            }
             process.destroy();
+            try {
+                if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                    process.waitFor(2, TimeUnit.SECONDS);
+                }
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                process.destroyForcibly();
+            }
+            try {
+                input.close();
+            } catch (Exception ignored) {
+                // The process may already have closed stdout.
+            }
+            reader.shutdownNow();
         }
     }
 }
