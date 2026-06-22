@@ -265,8 +265,10 @@ public class Intermediary {
 
     private IntermediaryResult proceedWithPlan(String prompt, RequestAssessment assessment) {
         HighLevelPlan plan = createPlan(prompt, assessment);
-        String webSearchInstruction = assessment.goals().contains("request-info")
-                ? "\n\nThis request asks for information. Call web_search to obtain current web results before answering."
+        boolean informationRequest = assessment.goals().contains("request-info");
+        String webSearchInstruction = informationRequest
+                ? "\n\nThis request asks for information. Call web_search first, then use web_fetch on the "
+                        + "most relevant results before answering. Cite the source URLs and do not rely only on snippets."
                 : "";
         Path saved = null;
         if (plan != null) {
@@ -278,14 +280,17 @@ public class Intermediary {
                 log.warn("[intermediary] could not save high-level plan", error);
             }
         }
-        if (plan == null) return IntermediaryResult.proceed(prompt + webSearchInstruction);
+        if (plan == null) {
+            return IntermediaryResult.proceed(prompt + webSearchInstruction,
+                    informationRequest ? "web_search" : "");
+        }
         String executionPrompt = "Original request:\n" + prompt
                 + "\n\nApproved high-level plan:\n" + plan.numberedSteps()
                 + (saved == null ? "" : "\n\nPlan file: " + saved.toAbsolutePath())
                 + webSearchInstruction
                 + "\n\nCarry out the plan using the available tools. Every action must be performed through "
                 + "an available tool; do not claim an action succeeded unless its tool result confirms it.";
-        return IntermediaryResult.proceed(executionPrompt);
+        return IntermediaryResult.proceed(executionPrompt, informationRequest ? "web_search" : "");
     }
 
     private RequestAssessment analyzeAndLog(String prompt) {
@@ -579,13 +584,17 @@ public class Intermediary {
         return Character.toLowerCase(value.charAt(0)) + value.substring(1);
     }
 
-    public record IntermediaryResult(boolean proceed, String prompt, String response) {
+    public record IntermediaryResult(boolean proceed, String prompt, String response, String requiredTool) {
         static IntermediaryResult proceed(String prompt) {
-            return new IntermediaryResult(true, prompt, "");
+            return proceed(prompt, "");
+        }
+
+        static IntermediaryResult proceed(String prompt, String requiredTool) {
+            return new IntermediaryResult(true, prompt, "", requiredTool == null ? "" : requiredTool);
         }
 
         static IntermediaryResult intervene(String response) {
-            return new IntermediaryResult(false, "", response);
+            return new IntermediaryResult(false, "", response, "");
         }
     }
 

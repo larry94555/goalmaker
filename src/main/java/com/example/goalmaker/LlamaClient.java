@@ -41,14 +41,32 @@ public class LlamaClient {
     }
 
     public String prompt(String text) throws Exception {
+        return prompt(text, "");
+    }
+
+    public String prompt(String text, String requiredTool) throws Exception {
         List<Map<String, Object>> messages = new ArrayList<>();
         messages.add(Map.of("role", "user", "content", text));
-        if (tools == null || tools.isEmpty()) return complete(messages, maxTokens);
+        String required = requiredTool == null ? "" : requiredTool.trim();
+        if (tools == null || tools.isEmpty()) {
+            if (!required.isBlank()) throw new IllegalStateException("required tool is unavailable: " + required);
+            return complete(messages, maxTokens);
+        }
+        if (!required.isBlank() && !tools.contains(required)) {
+            throw new IllegalStateException("required tool is unavailable: " + required);
+        }
 
         List<Map<String, Object>> specifications = tools.specifications();
         for (int iteration = 0; iteration < Math.max(1, maxToolIterations); iteration++) {
-            JsonNode assistant = send(messages, maxTokens, specifications);
+            boolean forceRequired = iteration == 0 && !required.isBlank();
+            List<Map<String, Object>> available = forceRequired
+                    ? specifications.stream().filter(specification -> toolName(specification).equals(required)).toList()
+                    : specifications;
+            JsonNode assistant = send(messages, maxTokens, available, forceRequired ? "required" : "auto");
             JsonNode calls = assistant.path("tool_calls");
+            if (iteration == 0 && !required.isBlank() && !callsRequiredTool(calls, required)) {
+                throw new IllegalStateException("model did not call required tool " + required);
+            }
             if (!calls.isArray() || calls.isEmpty()) return assistant.path("content").asText("");
             @SuppressWarnings("unchecked")
             Map<String, Object> assistantMessage = mapper.convertValue(assistant, Map.class);
@@ -71,15 +89,16 @@ public class LlamaClient {
     }
 
     String complete(List<Map<String, Object>> messages, int responseTokens) throws Exception {
-        JsonNode message = send(messages, responseTokens, List.of());
+        JsonNode message = send(messages, responseTokens, List.of(), null);
         JsonNode content = message.path("content");
         if (content.isMissingNode()) throw new IllegalStateException("Unexpected llama-server response");
         return content.asText();
     }
 
     private JsonNode send(List<Map<String, Object>> messages, int responseTokens,
-                          List<Map<String, Object>> toolSpecifications) throws Exception {
-        Map<String, Object> body = requestBody(model, messages, responseTokens, cachePrompt, toolSpecifications);
+                          List<Map<String, Object>> toolSpecifications, Object toolChoice) throws Exception {
+        Map<String, Object> body = requestBody(
+                model, messages, responseTokens, cachePrompt, toolSpecifications, toolChoice);
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create("http://" + host + ":" + port + "/v1/chat/completions"))
                 .timeout(Duration.ofMinutes(10))
@@ -101,6 +120,13 @@ public class LlamaClient {
     static Map<String, Object> requestBody(String model, List<Map<String, Object>> messages,
                                            int responseTokens, boolean cachePrompt,
                                            List<Map<String, Object>> toolSpecifications) {
+        return requestBody(model, messages, responseTokens, cachePrompt, toolSpecifications, "auto");
+    }
+
+    static Map<String, Object> requestBody(String model, List<Map<String, Object>> messages,
+                                           int responseTokens, boolean cachePrompt,
+                                           List<Map<String, Object>> toolSpecifications,
+                                           Object toolChoice) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model);
         body.put("messages", messages);
@@ -109,9 +135,25 @@ public class LlamaClient {
         body.put("stream", false);
         if (toolSpecifications != null && !toolSpecifications.isEmpty()) {
             body.put("tools", toolSpecifications);
-            body.put("tool_choice", "auto");
+            body.put("tool_choice", toolChoice == null ? "auto" : toolChoice);
         }
         return body;
+    }
+
+    private static boolean callsRequiredTool(JsonNode calls, String requiredTool) {
+        if (!calls.isArray()) return false;
+        for (JsonNode call : calls) {
+            if (requiredTool.equals(call.path("function").path("name").asText())) return true;
+        }
+        return false;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String toolName(Map<String, Object> specification) {
+        Object function = specification.get("function");
+        if (!(function instanceof Map<?, ?> map)) return "";
+        Object name = ((Map<String, Object>) map).get("name");
+        return name == null ? "" : String.valueOf(name);
     }
 
     @SuppressWarnings("unchecked")

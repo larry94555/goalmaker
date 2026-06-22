@@ -122,7 +122,9 @@ class IntermediaryFlowTest {
         Intermediary.IntermediaryResult result = intermediary.intercept("What is the capital of France?");
 
         assertTrue(result.proceed());
-        assertTrue(result.prompt().contains("Call web_search to obtain current web results before answering."));
+        assertTrue(result.prompt().contains("Call web_search first"));
+        assertTrue(result.prompt().contains("use web_fetch"));
+        assertEquals("web_search", result.requiredTool());
     }
 
     @Test
@@ -139,7 +141,8 @@ class IntermediaryFlowTest {
         Intermediary.IntermediaryResult result = intermediary.intercept("What is the capital of France?");
 
         assertTrue(result.proceed());
-        assertTrue(result.prompt().contains("Call web_search to obtain current web results before answering."));
+        assertTrue(result.prompt().contains("Call web_search first"));
+        assertEquals("web_search", result.requiredTool());
     }
 
     private static class ScriptedLlama extends LlamaClient {

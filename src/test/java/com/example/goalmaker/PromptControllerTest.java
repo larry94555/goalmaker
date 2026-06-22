@@ -15,8 +15,8 @@ class PromptControllerTest {
         List<String> calls = new ArrayList<>();
         LlamaClient llama = new LlamaClient(new ObjectMapper()) {
             @Override
-            public String prompt(String text) {
-                calls.add("prompt");
+            public String prompt(String text, String requiredTool) {
+                calls.add("prompt:" + requiredTool);
                 return "Unchanged response";
             }
         };
@@ -32,7 +32,7 @@ class PromptControllerTest {
         Map<String, String> response = controller.prompt(new PromptController.PromptRequest("Hello"));
 
         assertEquals(Map.of("response", "Unchanged response"), response);
-        assertEquals(List.of("intercept", "prompt"), calls);
+        assertEquals(List.of("intercept", "prompt:"), calls);
     }
 
     @Test
@@ -40,7 +40,7 @@ class PromptControllerTest {
         List<String> calls = new ArrayList<>();
         LlamaClient llama = new LlamaClient(new ObjectMapper()) {
             @Override
-            public String prompt(String text) {
+            public String prompt(String text, String requiredTool) {
                 calls.add("prompt");
                 return "must not be returned";
             }
@@ -58,5 +58,29 @@ class PromptControllerTest {
 
         assertEquals(Map.of("response", "Which output directory should be used?"), response);
         assertEquals(List.of("intercept"), calls);
+    }
+
+    @Test
+    void passesRequiredToolToTheMainModel() throws Exception {
+        List<String> calls = new ArrayList<>();
+        LlamaClient llama = new LlamaClient(new ObjectMapper()) {
+            @Override
+            public String prompt(String text, String requiredTool) {
+                calls.add(requiredTool);
+                return "researched response";
+            }
+        };
+        Intermediary intermediary = new Intermediary(llama) {
+            @Override
+            public IntermediaryResult intercept(String prompt) {
+                return IntermediaryResult.proceed(prompt, "web_search");
+            }
+        };
+
+        Map<String, String> response = new PromptController(llama, intermediary)
+                .prompt(new PromptController.PromptRequest("What changed?"));
+
+        assertEquals(Map.of("response", "researched response"), response);
+        assertEquals(List.of("web_search"), calls);
     }
 }
