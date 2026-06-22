@@ -265,16 +265,23 @@ public class Intermediary {
 
     private IntermediaryResult proceedWithPlan(String prompt, RequestAssessment assessment) {
         HighLevelPlan plan = createPlan(prompt, assessment);
+        Path saved = null;
         if (plan != null) {
             log.info("[intermediary] high-level-plan:\n{}", plan.numberedSteps());
             try {
-                Path saved = savePlan(plan, prompt, assessment);
+                saved = savePlan(plan, prompt, assessment);
                 log.info("[intermediary] high-level-plan-file={}", saved.toAbsolutePath());
             } catch (IOException error) {
                 log.warn("[intermediary] could not save high-level plan", error);
             }
         }
-        return IntermediaryResult.proceed(prompt);
+        if (plan == null) return IntermediaryResult.proceed(prompt);
+        String executionPrompt = "Original request:\n" + prompt
+                + "\n\nApproved high-level plan:\n" + plan.numberedSteps()
+                + (saved == null ? "" : "\n\nPlan file: " + saved.toAbsolutePath())
+                + "\n\nCarry out the plan using the available tools. Every action must be performed through "
+                + "a skill or MCP tool; do not claim an action succeeded unless its tool result confirms it.";
+        return IntermediaryResult.proceed(executionPrompt);
     }
 
     private RequestAssessment analyzeAndLog(String prompt) {

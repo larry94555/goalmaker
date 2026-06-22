@@ -1,0 +1,2 @@
+$arguments = [Console]::In.ReadToEnd() | ConvertFrom-Json
+Write-Output $arguments.text

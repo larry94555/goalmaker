@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "echo": {
+      "command": "node",
+      "args": ["examples/echo-mcp-server.js"],
+      "env": {},
+      "protocolVersion": "2024-11-05"
+    }
+  }
+}

@@ -63,6 +63,7 @@ class IntermediaryFlowTest {
         assertTrue(second.proceed());
         assertTrue(second.prompt().contains("Original request:"));
         assertTrue(second.prompt().contains("Put it in src"));
+        assertTrue(second.prompt().contains("Every action must be performed through a skill or MCP tool"));
         assertEquals(10, llama.calls.size());
         assertTrue(logs.list.stream().map(ILoggingEvent::getFormattedMessage)
                 .anyMatch(message -> message.contains("clarification-state=resolved")));
