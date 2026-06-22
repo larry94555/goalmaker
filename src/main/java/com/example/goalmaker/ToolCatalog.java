@@ -1,6 +1,7 @@
 package com.example.goalmaker;
 
 import jakarta.annotation.PostConstruct;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -14,16 +15,24 @@ public class ToolCatalog {
 
     private final SkillToolProvider skills;
     private final McpToolProvider mcp;
+    private final WebSearchToolProvider webSearch;
     private final Map<String, ToolDefinition> tools = new LinkedHashMap<>();
 
-    public ToolCatalog(SkillToolProvider skills, McpToolProvider mcp) {
+    @Autowired
+    public ToolCatalog(SkillToolProvider skills, McpToolProvider mcp, WebSearchToolProvider webSearch) {
         this.skills = skills;
         this.mcp = mcp;
+        this.webSearch = webSearch;
+    }
+
+    ToolCatalog(SkillToolProvider skills, McpToolProvider mcp) {
+        this(skills, mcp, null);
     }
 
     @PostConstruct
     public synchronized void refresh() {
         tools.clear();
+        if (webSearch != null) webSearch.tools().forEach(this::register);
         skills.tools().forEach(this::register);
         mcp.tools().forEach(this::register);
         log.info("[tools] exposing {} tool(s) to the model", tools.size());
@@ -53,7 +62,8 @@ public class ToolCatalog {
         try {
             log.info("[tools] calling {} source={} arguments={}", name, tool.source(), arguments);
             String result = tool.executor().execute(arguments == null ? Map.of() : arguments);
-            return result == null || result.isBlank() ? "(tool completed with no output)" : result;
+            String normalized = result == null || result.isBlank() ? "(tool completed with no output)" : result;
+            return tool.untrusted() ? UntrustedContent.wrap(name, normalized) : normalized;
         } catch (Exception error) {
             log.warn("[tools] {} failed: {}", name, error.getMessage());
             return "ERROR: " + error.getMessage();

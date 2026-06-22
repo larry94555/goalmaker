@@ -63,7 +63,7 @@ class IntermediaryFlowTest {
         assertTrue(second.proceed());
         assertTrue(second.prompt().contains("Original request:"));
         assertTrue(second.prompt().contains("Put it in src"));
-        assertTrue(second.prompt().contains("Every action must be performed through a skill or MCP tool"));
+        assertTrue(second.prompt().contains("Every action must be performed through an available tool"));
         assertEquals(10, llama.calls.size());
         assertTrue(logs.list.stream().map(ILoggingEvent::getFormattedMessage)
                 .anyMatch(message -> message.contains("clarification-state=resolved")));
@@ -103,6 +103,43 @@ class IntermediaryFlowTest {
         assertFalse(cancelled.proceed());
         assertEquals("The pending request has been cancelled.", cancelled.response());
         assertEquals(4, llama.calls.size());
+    }
+
+    @Test
+    void informationRequestRequiresWebSearch(@TempDir Path tempDir) {
+        ScriptedLlama llama = new ScriptedLlama(
+                "request",
+                "request-info",
+                "completion-criteria-clarity:: fully clear\n"
+                        + "completion-criteria-proposal: The capital of France is returned.\n"
+                        + "completion-criteria-open-issues: NONE",
+                "title: Find the capital of France\n"
+                        + "1. Search the web for the capital of France.\n"
+                        + "2. Return the supported answer.");
+        Intermediary intermediary = new Intermediary(llama);
+        intermediary.setGoalsDirectory(tempDir.resolve("goals"));
+
+        Intermediary.IntermediaryResult result = intermediary.intercept("What is the capital of France?");
+
+        assertTrue(result.proceed());
+        assertTrue(result.prompt().contains("Call web_search to obtain current web results before answering."));
+    }
+
+    @Test
+    void informationRequestRequiresWebSearchWhenPlanningFails() {
+        ScriptedLlama llama = new ScriptedLlama(
+                "request",
+                "request-info",
+                "completion-criteria-clarity:: fully clear\n"
+                        + "completion-criteria-proposal: The capital of France is returned.\n"
+                        + "completion-criteria-open-issues: NONE",
+                "No usable plan was generated.");
+        Intermediary intermediary = new Intermediary(llama);
+
+        Intermediary.IntermediaryResult result = intermediary.intercept("What is the capital of France?");
+
+        assertTrue(result.proceed());
+        assertTrue(result.prompt().contains("Call web_search to obtain current web results before answering."));
     }
 
     private static class ScriptedLlama extends LlamaClient {

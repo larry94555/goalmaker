@@ -265,6 +265,9 @@ public class Intermediary {
 
     private IntermediaryResult proceedWithPlan(String prompt, RequestAssessment assessment) {
         HighLevelPlan plan = createPlan(prompt, assessment);
+        String webSearchInstruction = assessment.goals().contains("request-info")
+                ? "\n\nThis request asks for information. Call web_search to obtain current web results before answering."
+                : "";
         Path saved = null;
         if (plan != null) {
             log.info("[intermediary] high-level-plan:\n{}", plan.numberedSteps());
@@ -275,12 +278,13 @@ public class Intermediary {
                 log.warn("[intermediary] could not save high-level plan", error);
             }
         }
-        if (plan == null) return IntermediaryResult.proceed(prompt);
+        if (plan == null) return IntermediaryResult.proceed(prompt + webSearchInstruction);
         String executionPrompt = "Original request:\n" + prompt
                 + "\n\nApproved high-level plan:\n" + plan.numberedSteps()
                 + (saved == null ? "" : "\n\nPlan file: " + saved.toAbsolutePath())
+                + webSearchInstruction
                 + "\n\nCarry out the plan using the available tools. Every action must be performed through "
-                + "a skill or MCP tool; do not claim an action succeeded unless its tool result confirms it.";
+                + "an available tool; do not claim an action succeeded unless its tool result confirms it.";
         return IntermediaryResult.proceed(executionPrompt);
     }
 
