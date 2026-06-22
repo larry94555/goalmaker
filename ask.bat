@@ -1,7 +1,7 @@
 @echo off
 setlocal
 if "%~1"=="" (
-  echo Usage: prompt.bat "your prompt"
+  echo Usage: ask.bat "your prompt"
   exit /b 1
 )
 set "GOALMAKER_PROMPT=%~1"
