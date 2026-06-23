@@ -74,11 +74,36 @@ to disable it. Common Crawl currently supplies capture metadata from its latest 
 download archived WARC content. Public token-free services may throttle or temporarily reject traffic, so the
 general search path remains the bounded fallback.
 
-Start the included local SearXNG service with Docker:
+GoalMaker probes SearXNG asynchronously at startup and every 30 seconds by default. It reports `disabled`,
+`starting`, `healthy`, `degraded`, or `unavailable`, along with latency, last success, failure details, circuit
+state, and counters at:
+
+```text
+GET http://localhost:8080/health/web-search
+```
+
+A slow successful response is degraded. After repeated failures, the circuit opens and searches immediately use
+DuckDuckGo and applicable specialized providers instead of waiting for a known-unavailable SearXNG request.
+Background probes continue and restore SearXNG automatically when it recovers. The compact SearXNG health state
+is also included in `web_search` results, including cached results.
+
+Start the included local SearXNG service manually with Docker:
 
 ```bat
 docker compose -f docker-compose.searxng.yml up -d
 ```
+
+To let GoalMaker run that command when SearXNG is unavailable at startup, explicitly set:
+
+```properties
+web.search.searxng-manage=true
+```
+
+Managed startup is off by default. GoalMaker first probes an already-running service, starts the configured
+Compose file only when needed, waits for readiness without blocking Spring Boot startup, and writes command output
+to `searxng-compose.log`. On Windows it also checks Docker Desktop's standard executable location when `docker`
+is not yet on `PATH`. GoalMaker does not stop the container when the application exits. Set
+`web.search.searxng-url=` to intentionally disable SearXNG and its probes.
 
 Its JSON API is bound to `127.0.0.1:8888`; it is not exposed to the network. Replace the placeholder secret in
 `searxng/settings.yml` before changing that binding. If Docker or SearXNG is unavailable, GoalMaker continues
@@ -93,8 +118,9 @@ requires otherwise.
 
 All research, search, and fetched content is fenced as untrusted external data before reaching the model. Common
 prompt-injection phrases receive an additional warning, but the untrusted boundary applies to every result.
-Timeouts, retry limits, cache behavior, provider URLs, response sizes, redirects, fetch text limits, source
-thresholds, candidate count, and research concurrency are configurable in `application.properties`.
+Timeouts, retry limits, cache behavior, provider URLs, response sizes, redirects, fetch text limits, health
+intervals, circuit breaking, optional Compose startup, source thresholds, candidate count, and research
+concurrency are configurable in `application.properties`.
 
 With local SearXNG running, execute the optional live integration check with:
 
@@ -102,8 +128,9 @@ With local SearXNG running, execute the optional live integration check with:
 .\mvnw.cmd -B -ntp "-Dgoalmaker.live-web-test=true" test
 ```
 
-This checks the SearXNG research path plus live MediaWiki/Wikidata, arXiv, and Common Crawl routing. GDELT parsing
-and fallback behavior are tested with deterministic fixtures because its public endpoint may rate-limit CI runs.
+This checks SearXNG health/readiness and research plus live MediaWiki/Wikidata, arXiv, and Common Crawl routing.
+GDELT parsing and fallback behavior are tested with deterministic fixtures because its public endpoint may
+rate-limit CI runs.
 
 ### Create A Skill
 
