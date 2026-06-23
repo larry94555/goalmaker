@@ -217,9 +217,10 @@ the health endpoint. Expected: Spring Boot starts without waiting for search, he
 ask.bat "Fetch https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf and report the fetch_isolation and fetch_policy objects exactly, followed by the extracted text."
 ```
 
-Expected: `fetch_isolation.mode` is `worker-process`; enabled is true; heap, processor, wall-clock, output, and
-pool limits are present. `fetch_policy.dns_pinned` is true, allowed ports are 80 and 443, and total time and HTTP
-request budgets are present.
+Expected: `fetch_isolation.mode` is `worker-process` with the default configuration, or `worker-docker` when
+Docker mode is selected. Enabled is true; pool, resource, wall-clock, output, and worker status fields are present.
+`fetch_policy.dns_pinned` is true, allowed ports are 80 and 443, and total time and HTTP request budgets are
+present.
 
 While GoalMaker is running, worker JVMs can be observed with PowerShell:
 
@@ -229,6 +230,42 @@ Get-CimInstance Win32_Process | Where-Object CommandLine -Match 'FetchWorkerMain
 
 Workers are started lazily. Run a fetch prompt first. Healthy workers remain available for reuse and are stopped
 when GoalMaker exits.
+
+### Docker-enforced worker
+
+Set the following and restart GoalMaker:
+
+```properties
+web.fetch.worker.mode=docker
+web.fetch.worker.docker.auto-build=true
+```
+
+Run the policy-provenance prompt again. Expected: `fetch_isolation.mode=worker-docker`; total memory, CPU, PID,
+tmpfs, read-only-root, capability, no-new-privileges, firewall, build, and worker-health fields are present. The
+first request may build the image and writes progress to `fetch-worker-docker-build.log`. A matching source
+fingerprint skips subsequent builds.
+
+Inspect the running container after a fetch:
+
+```powershell
+docker ps --filter "label=com.example.goalmaker.component=fetch-worker"
+docker inspect $(docker ps -q --filter "label=com.example.goalmaker.component=fetch-worker")
+```
+
+Expected HostConfig: read-only root, memory and memory-swap limits, NanoCpus, PidsLimit, `/tmp` tmpfs,
+`no-new-privileges`, all capabilities dropped with only startup `NET_ADMIN`, `SETUID`, `SETGID`, and `SETPCAP`
+added. The entrypoint removes those capabilities before Java starts.
+
+Run the real Docker integration test:
+
+```bat
+.\mvnw.cmd -B -ntp "-Dgoalmaker.live-docker-worker-test=true" "-Dtest=DockerFetchWorkerLiveTest" test
+```
+
+Expected: the image builds or matches its fingerprint, a public fetch succeeds, HostConfig limits are verified,
+Java reports UID 65532, zero effective capabilities, and `NoNewPrivs=1`, a root-filesystem write fails, and a
+deliberately permissive request to `host.docker.internal` never reaches the host test server because the container
+firewall rejects private/high-port egress.
 
 ### Unapproved destination port
 
@@ -292,6 +329,12 @@ Run the opt-in public integration suite with local SearXNG available:
 Public providers may throttle requests; a live failure is diagnostic and should be compared with the deterministic
 suite before treating it as a regression.
 
+Docker sandbox verification is intentionally separate because it requires Docker and may build an image:
+
+```bat
+.\mvnw.cmd -B -ntp "-Dgoalmaker.live-docker-worker-test=true" "-Dtest=DockerFetchWorkerLiveTest" test
+```
+
 ## Coverage Review
 
 This checklist was reviewed against the current web-search implementation and roadmap.
@@ -320,6 +363,11 @@ This checklist was reviewed against the current web-search implementation and ro
 | Byte, page, character, and parsing-time budgets | Prompt 9 | `WebFetchToolProviderTest`; timeout is enforced in implementation |
 | Isolated worker process and process-limit provenance | Fetch isolation prompt | `WebFetchToolProviderTest`, `FetchWorkerClientTest` |
 | Worker reuse, crash, timeout, output overflow, and recovery | Worker failure command | `FetchWorkerClientTest` |
+| Docker launch hardening and explicit process fallback | Docker worker section | `DockerWorkerCommandTest` |
+| Docker memory/CPU/PID/read-only/tmpfs/no-new-privileges controls | Docker worker section | `DockerFetchWorkerLiveTest` |
+| Container firewall independent of application policy | Docker worker section | `DockerFetchWorkerLiveTest` |
+| Source-fingerprinted managed image build | Docker worker section | `DockerFetchWorkerLiveTest` |
+| Worker health, start, failure, and build counters | Fetch isolation prompts | `FetchWorkerClientTest`, `DockerFetchWorkerLiveTest` |
 | DNS pinning and rebinding resistance | Private-address prompt | `PinnedDnsTest` |
 | Public destination-port allowlist | Unapproved-port prompt | `PinnedDnsTest` |
 | One total time and HTTP-request budget | Network budget command | `FetchBudgetTest`, `WebFetchToolProviderTest` |
@@ -329,8 +377,8 @@ This checklist was reviewed against the current web-search implementation and ro
 | Optional managed Compose startup | Managed-startup operation | `SearxngHealthManagerTest`, `WebSearchConfigurationTest` |
 | Live SearXNG and public-provider compatibility | Live command | `WebResearchLiveTest`, `SpecializedSearchLiveTest`, `SearxngHealthLiveTest` |
 
-The prompt suite covers every user-visible web-search capability. Network-sensitive and isolation cases have
-deterministic fixtures, except the PDF timeout itself: production code enforces it with a cancellable bounded
-future and a parent-enforced worker deadline, while the suite avoids a deliberately CPU-consuming PDF fixture.
-The remaining isolation gap is operating-system enforcement of total RSS, CPU, PIDs, filesystem access, and
-network egress; optional container worker mode is the next roadmap item.
+The prompt suite covers every user-visible web-search capability. Network-sensitive and process-isolation cases
+have deterministic fixtures; Docker enforcement has an opt-in live test. The PDF timeout itself is enforced with
+a cancellable bounded future and a parent-enforced worker deadline, while the suite avoids a deliberately
+CPU-consuming PDF fixture. The next roadmap priority is claim-level semantic agreement and conflict analysis,
+because source-count sufficiency still does not prove that evidence supports the same claims.

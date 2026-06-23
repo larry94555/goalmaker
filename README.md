@@ -5,6 +5,7 @@ A minimal Spring Boot application that starts and supervises `llama-server` usin
 ## Run
 
 Requirements: Java 17+, Maven (or the included Maven wrapper), and `llama-server.exe` on `PATH` or in this directory.
+Docker Desktop is optional and is used only for SearXNG or Docker fetch-worker mode.
 
 ```bat
 run.bat
@@ -147,6 +148,7 @@ web.fetch.allowed-ports=80,443
 web.fetch.total-budget-seconds=40
 web.fetch.max-http-requests=12
 web.fetch.worker.enabled=true
+web.fetch.worker.mode=process
 web.fetch.worker.pool-size=4
 web.fetch.worker.memory-mb=192
 web.fetch.worker.active-processors=1
@@ -155,8 +157,36 @@ web.fetch.worker.max-output-bytes=1048576
 ```
 
 Set `web.fetch.worker.enabled=false` only for trusted debugging; it moves parsing back into the Spring Boot
-process. The portable worker boundary limits managed JVM resources but is not an operating-system network or
-total-RSS sandbox. Container-enforced CPU, memory, process, filesystem, and egress policy remains a roadmap item.
+process. `process` mode is the portable default and does not require Docker.
+
+For hard operating-system enforcement, select Docker mode and restart GoalMaker:
+
+```properties
+web.fetch.worker.mode=docker
+web.fetch.worker.docker.auto-build=true
+web.fetch.worker.docker.memory-mb=384
+web.fetch.worker.docker.cpus=1.0
+web.fetch.worker.docker.pids-limit=64
+web.fetch.worker.docker.tmpfs-mb=32
+```
+
+The first Docker fetch builds `goalmaker-fetch-worker:local` from
+`docker/fetch-worker/Dockerfile`. The build is outside the per-fetch deadline and writes output to
+`fetch-worker-docker-build.log`. The image receives a source fingerprint label; later application starts inspect
+that label and skip the build when the image matches the current `pom.xml`, main sources, Dockerfile, and
+entrypoint. Set `web.fetch.worker.docker.auto-build=false` to require a prebuilt image instead.
+
+Docker workers have no host mounts, a read-only root filesystem, a small no-exec tmpfs, fixed total memory and
+swap, CPU and PID limits, a file-descriptor limit, and `no-new-privileges`. At startup the entrypoint uses only
+`NET_ADMIN`, `SETUID`, `SETGID`, and `SETPCAP` to install the firewall, change to UID 65532, and erase its own
+capability bounding set before Java starts. IPv6 is disabled. The firewall permits DNS only to resolvers supplied
+in Docker's `/etc/resolv.conf`, rejects private and reserved IPv4 ranges, and permits remaining outbound TCP only
+on ports 80 and 443. This independently backs up the worker's pinned-DNS and URL policy.
+
+`fetch_isolation` reports `worker-process` or `worker-docker`, live/started/failed worker counts, the most recent
+worker failure, and Docker build details. A failed Docker image build or unavailable engine is reported rather
+than silently downgrading security. To return to the portable fallback, explicitly set
+`web.fetch.worker.mode=process` and restart.
 
 All research, search, and fetched content is fenced as untrusted external data before reaching the model. Common
 prompt-injection phrases receive an additional warning, but the untrusted boundary applies to every result.

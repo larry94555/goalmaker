@@ -66,42 +66,53 @@ Tests cover DNS rebinding simulation, private addresses, unapproved ports, redir
 slow streams, compressed expansion, parser-process crashes, wall-clock termination, oversized worker output,
 worker reuse, and automatic recovery.
 
+### Container-enforced worker sandbox
+
+GoalMaker now provides explicit `process` and `docker` fetch-worker modes. Docker mode preserves the worker
+protocol while adding hard total-memory/swap, CPU, PID, file-descriptor, read-only-filesystem, tmpfs, and
+no-new-privileges controls. It uses no host mounts and automatically removes stopped containers.
+
+The container entrypoint installs an outbound firewall, then changes to an unprivileged UID and erases its
+capability bounding set before Java starts. IPv6 is disabled; DNS is allowed only to Docker-provided resolvers;
+private and reserved IPv4 ranges are rejected; and all remaining egress is limited to TCP ports 80 and 443.
+Application-level pinned DNS, robots policy, destination-port checks, and total request budgets remain active as
+an independent layer.
+
+Docker images can be built automatically on first use. A source fingerprint label avoids rebuilding a matching
+image, while build logs and worker health/restart counters remain visible. Tests audit hardened launch flags and
+exercise a real Docker image, HostConfig limits, successful public fetching, and an intentionally permissive
+application request that is still blocked by the container firewall. The live test also verifies the Java UID,
+empty effective capability set, no-new-privileges state, and read-only root filesystem.
+
 ## Next Recommended Change
 
-### 1. Container-enforced worker sandbox
+### 1. Claim-level agreement and conflict analysis
 
-Add an optional Docker worker mode with hard total-RSS, CPU, PID, filesystem, capability, and network-egress
-controls while retaining the portable JVM worker as the no-Docker fallback. Restrict container egress to DNS and
-public TCP ports 80/443 and expose worker health and restart counters.
+Use the local model to extract comparable claims from fetched evidence, identify material agreement or
+contradiction, and attach source references to every finding. Keep retrieved facts separate from model judgments,
+represent uncertainty explicitly, and never infer agreement merely because the source threshold was met.
 
-This is the highest-value remaining security improvement because JVM heap and wall-clock controls do not cap all
-native memory or provide an operating-system network boundary. The current process worker contains parser crashes
-and pins validated DNS results, but a container can enforce the policy even if a parser or dependency is
-compromised.
+This is the highest-value remaining answer-quality improvement because discovery, extraction, and isolation are
+now broad and resilient, while corroboration still measures source structure rather than whether sources support
+the same claims.
 
 Completion criteria:
 
-- provide explicit `process` and `docker` worker modes with process mode as a portable fallback
-- run the Docker worker read-only with dropped capabilities, no new privileges, bounded RSS/CPU/PIDs, and tmpfs
-- enforce DNS plus public HTTP(S)-only egress independently of application-level checks
-- report worker mode, health, restarts, and resource-limit terminations
-- preserve the current worker protocol and structured fetch result contract
-- test container startup, policy enforcement, crash recovery, and fallback behavior
+- extract concise, normalized claims with source and excerpt references
+- group only genuinely comparable claims and label support, contradiction, partial overlap, or insufficient evidence
+- separate deterministic retrieval facts from local-model interpretations in the result schema
+- preserve minority and conflicting evidence instead of collapsing to a majority answer
+- include uncertainty, source quality, and missing-evidence notes for every assessment
+- test clear agreement, direct contradiction, date/version drift, incomparable claims, and unsupported model output
 
 ## Later Priorities
 
-### 2. Claim-level agreement and conflict analysis
-
-Use the local model to extract comparable claims from evidence, identify material agreement or contradiction,
-and attach source references to each finding. Keep retrieval facts separate from model judgments and expose
-uncertainty explicitly.
-
-### 3. Search quality evaluation
+### 2. Search quality evaluation
 
 Maintain a versioned set of factual, current, technical, multilingual, and adversarial queries. Track provider
 availability, precision, source diversity, latency, cache effectiveness, and citation correctness over time.
 
-### 4. Optional independent local index
+### 3. Optional independent local index
 
 Evaluate YaCy or a focused local crawler for private corpora, intranet search, and resilience when public search
 providers are unavailable. Keep it optional because crawling and index maintenance have substantial resource cost.

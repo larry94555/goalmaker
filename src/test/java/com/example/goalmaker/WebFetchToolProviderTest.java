@@ -58,6 +58,7 @@ class WebFetchToolProviderTest {
             assertEquals("second worker page", second.path("content").asText());
             assertEquals("worker-process", first.path("fetch_isolation").path("mode").asText());
             assertTrue(first.path("fetch_policy").path("dns_pinned").asBoolean());
+            assertEquals(1, first.path("fetch_isolation").path("status").path("live_workers").asInt());
             assertTrue(second.path("robots").path("cached").asBoolean());
             assertEquals(1, robotsCalls.get());
         } finally {

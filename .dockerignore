@@ -1,0 +1,11 @@
+.git
+.github
+.idea
+.mvn
+goals
+target
+*.gguf
+*.log
+searxng
+skills
+examples

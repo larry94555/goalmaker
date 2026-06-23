@@ -34,6 +34,7 @@ public class WebFetchToolProvider {
     @Value("${web.fetch.pdf.max-pages:40}") private int pdfMaxPages = 40;
     @Value("${web.fetch.pdf.timeout-seconds:20}") private int pdfTimeoutSeconds = 20;
     @Value("${web.fetch.worker.enabled:true}") private boolean workerEnabled = true;
+    @Value("${web.fetch.worker.mode:process}") private String workerMode = "process";
     @Value("${web.fetch.worker.pool-size:4}") private int workerPoolSize = 4;
     @Value("${web.fetch.worker.memory-mb:192}") private int workerMemoryMb = 192;
     @Value("${web.fetch.worker.active-processors:1}") private int workerActiveProcessors = 1;
@@ -41,6 +42,20 @@ public class WebFetchToolProvider {
     @Value("${web.fetch.worker.max-output-bytes:1048576}") private int workerMaxOutputBytes = 1_048_576;
     @Value("${web.fetch.worker.main-class:com.example.goalmaker.FetchWorkerMain}")
     private String workerMainClass = FetchWorkerMain.class.getName();
+    @Value("${web.fetch.worker.docker.command:docker}") private String dockerCommand = "docker";
+    @Value("${web.fetch.worker.docker.image:goalmaker-fetch-worker:local}")
+    private String dockerImage = "goalmaker-fetch-worker:local";
+    @Value("${web.fetch.worker.docker.auto-build:true}") private boolean dockerAutoBuild = true;
+    @Value("${web.fetch.worker.docker.dockerfile:docker/fetch-worker/Dockerfile}")
+    private String dockerfile = "docker/fetch-worker/Dockerfile";
+    @Value("${web.fetch.worker.docker.context:.}") private String dockerContext = ".";
+    @Value("${web.fetch.worker.docker.build-log:fetch-worker-docker-build.log}")
+    private String dockerBuildLog = "fetch-worker-docker-build.log";
+    @Value("${web.fetch.worker.docker.build-timeout-seconds:600}") private int dockerBuildTimeoutSeconds = 600;
+    @Value("${web.fetch.worker.docker.memory-mb:384}") private int dockerMemoryMb = 384;
+    @Value("${web.fetch.worker.docker.cpus:1.0}") private double dockerCpus = 1.0;
+    @Value("${web.fetch.worker.docker.pids-limit:64}") private int dockerPidsLimit = 64;
+    @Value("${web.fetch.worker.docker.tmpfs-mb:32}") private int dockerTmpfsMb = 32;
 
     private final ObjectMapper mapper;
     private final WebFetchEngine localEngine;
@@ -87,7 +102,7 @@ public class WebFetchToolProvider {
         if (workerEnabled) {
             FetchIsolationSettings isolation = isolationSettings();
             payload = workers.fetch(arguments, fetchSettings, isolation);
-            payload.put("fetch_isolation", isolationProvenance(isolation));
+            payload.put("fetch_isolation", isolationProvenance(isolation, workers.status(isolation)));
         } else {
             payload = localEngine.fetchPayload(arguments, fetchSettings);
             payload.put("fetch_isolation", Map.of("mode", "in-process", "enabled", false));
@@ -104,19 +119,33 @@ public class WebFetchToolProvider {
     }
 
     private FetchIsolationSettings isolationSettings() {
-        return new FetchIsolationSettings(workerPoolSize, workerMemoryMb, workerActiveProcessors,
-                workerTimeoutSeconds, workerMaxOutputBytes, workerMainClass);
+        return new FetchIsolationSettings(workerMode, workerPoolSize, workerMemoryMb, workerActiveProcessors,
+                workerTimeoutSeconds, workerMaxOutputBytes, workerMainClass, dockerCommand, dockerImage,
+                dockerAutoBuild, dockerfile, dockerContext, dockerBuildLog, dockerBuildTimeoutSeconds,
+                dockerMemoryMb, dockerCpus, dockerPidsLimit, dockerTmpfsMb);
     }
 
-    private static Map<String, Object> isolationProvenance(FetchIsolationSettings settings) {
+    private static Map<String, Object> isolationProvenance(FetchIsolationSettings settings,
+                                                           Map<String, Object> status) {
         Map<String, Object> provenance = new LinkedHashMap<>();
-        provenance.put("mode", "worker-process");
+        provenance.put("mode", settings.docker() ? "worker-docker" : "worker-process");
         provenance.put("enabled", true);
         provenance.put("pool_size", settings.poolSize());
         provenance.put("heap_limit_mb", settings.memoryMb());
         provenance.put("active_processors", settings.activeProcessors());
         provenance.put("wall_clock_seconds", settings.timeoutSeconds());
         provenance.put("output_limit_bytes", settings.maxOutputBytes());
+        if (settings.docker()) {
+            provenance.put("total_memory_limit_mb", settings.dockerMemoryMb());
+            provenance.put("cpu_limit", settings.dockerCpus());
+            provenance.put("pids_limit", settings.dockerPidsLimit());
+            provenance.put("tmpfs_mb", settings.dockerTmpfsMb());
+            provenance.put("read_only_root", true);
+            provenance.put("capabilities_dropped", true);
+            provenance.put("no_new_privileges", true);
+            provenance.put("egress_firewall", "dns-and-public-http-https-only");
+        }
+        provenance.put("status", status);
         return provenance;
     }
 

@@ -23,12 +23,18 @@ import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class FetchWorkerClient implements Closeable {
     private final ObjectMapper mapper;
     private final Object lock = new Object();
     private final BlockingQueue<WorkerProcess> idle = new LinkedBlockingQueue<>();
     private final Set<WorkerProcess> workers = new HashSet<>();
+    private final DockerWorkerManager docker = new DockerWorkerManager();
+    private final AtomicLong workersStarted = new AtomicLong();
+    private final AtomicLong workerFailures = new AtomicLong();
+    private final AtomicReference<String> lastWorkerFailure = new AtomicReference<>("");
     private volatile boolean closed;
 
     FetchWorkerClient(ObjectMapper mapper) {
@@ -37,6 +43,7 @@ final class FetchWorkerClient implements Closeable {
 
     Map<String, Object> fetch(Map<String, Object> arguments, FetchSettings fetchSettings,
                               FetchIsolationSettings isolation) throws Exception {
+        docker.prepare(isolation);
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(isolation.timeoutSeconds());
         WorkerProcess worker = acquire(isolation, deadline);
         boolean reusable = false;
@@ -50,8 +57,10 @@ final class FetchWorkerClient implements Closeable {
             }
             return new java.util.LinkedHashMap<>(response.payload());
         } catch (IllegalStateException error) {
+            if (!reusable) recordFailure(error);
             throw error;
         } catch (Exception error) {
+            if (!reusable) recordFailure(error);
             throw new IllegalStateException(usefulMessage(error), error);
         } finally {
             if (reusable && worker.alive()) release(worker);
@@ -71,8 +80,9 @@ final class FetchWorkerClient implements Closeable {
             synchronized (lock) {
                 workers.removeIf(worker -> !worker.alive());
                 if (workers.size() < settings.poolSize()) {
-                    WorkerProcess created = WorkerProcess.start(settings, mapper);
+                    WorkerProcess created = WorkerProcess.start(settings, mapper, docker);
                     workers.add(created);
+                    workersStarted.incrementAndGet();
                     return created;
                 }
             }
@@ -117,6 +127,23 @@ final class FetchWorkerClient implements Closeable {
         }
     }
 
+    Map<String, Object> status(FetchIsolationSettings settings) {
+        Map<String, Object> status = new java.util.LinkedHashMap<>();
+        status.put("mode", settings.mode());
+        status.put("live_workers", workerCount());
+        status.put("workers_started", workersStarted.get());
+        status.put("worker_failures", workerFailures.get());
+        String failure = lastWorkerFailure.get();
+        if (!failure.isBlank()) status.put("last_worker_failure", failure);
+        if (settings.docker()) status.putAll(docker.status());
+        return status;
+    }
+
+    private void recordFailure(Throwable error) {
+        workerFailures.incrementAndGet();
+        lastWorkerFailure.set(usefulMessage(error));
+    }
+
     private static long remainingMillis(long deadline) {
         long remaining = deadline - System.nanoTime();
         return remaining <= 0 ? 0 : Math.max(1, TimeUnit.NANOSECONDS.toMillis(remaining));
@@ -150,8 +177,10 @@ final class FetchWorkerClient implements Closeable {
             });
         }
 
-        static WorkerProcess start(FetchIsolationSettings settings, ObjectMapper mapper) throws IOException {
-            ProcessBuilder builder = new ProcessBuilder(command(settings));
+        static WorkerProcess start(FetchIsolationSettings settings, ObjectMapper mapper,
+                                   DockerWorkerManager docker) throws Exception {
+            ProcessBuilder builder = new ProcessBuilder(command(settings, docker));
+            if (settings.docker()) docker.configureEnvironment(builder);
             builder.redirectError(ProcessBuilder.Redirect.DISCARD);
             return new WorkerProcess(builder.start(), settings.fingerprint(), mapper);
         }
@@ -207,7 +236,13 @@ final class FetchWorkerClient implements Closeable {
             reader.shutdownNow();
         }
 
-        private static List<String> command(FetchIsolationSettings settings) {
+        private static List<String> command(FetchIsolationSettings settings,
+                                            DockerWorkerManager docker) throws Exception {
+            if (settings.docker()) return DockerWorkerCommand.create(docker.executable(settings), settings);
+            return processCommand(settings);
+        }
+
+        private static List<String> processCommand(FetchIsolationSettings settings) {
             String java = Path.of(System.getProperty("java.home"), "bin",
                     isWindows() ? "java.exe" : "java").toString();
             String classpath = System.getProperty("java.class.path");

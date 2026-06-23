@@ -18,7 +18,7 @@ class FetchWorkerClientTest {
     void reusesHealthyWorkerAndRecoversAfterCrashTimeoutAndOversizedOutput() throws Exception {
         FetchWorkerClient client = new FetchWorkerClient(mapper);
         FetchIsolationSettings isolation = new FetchIsolationSettings(
-                1, 64, 1, 1, 1_024, FakeFetchWorkerMain.class.getName());
+                1, 64, 1, 3, 1_024, FakeFetchWorkerMain.class.getName());
         try {
             Map<String, Object> first = client.fetch(Map.of("url", "https://example.com/one"),
                     fetchSettings(), isolation);
@@ -46,6 +46,12 @@ class FetchWorkerClientTest {
             Map<String, Object> finalResponse = client.fetch(Map.of("url", "https://example.com/final"),
                     fetchSettings(), isolation);
             assertEquals("worker response", finalResponse.get("content"));
+            Map<String, Object> status = client.status(isolation);
+            assertEquals("process", status.get("mode"));
+            assertEquals(1, ((Number) status.get("live_workers")).intValue());
+            assertTrue(((Number) status.get("workers_started")).longValue() >= 4);
+            assertEquals(3L, ((Number) status.get("worker_failures")).longValue());
+            assertTrue(String.valueOf(status.get("last_worker_failure")).contains("output exceeded"));
         } finally {
             client.close();
         }
