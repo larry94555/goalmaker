@@ -48,14 +48,16 @@ candidates, fetches pages concurrently, and returns a compact evidence bundle be
 Search queries are classified deterministically into one or more intents. General web search always remains
 available, while current-news queries also use GDELT, factual-entity queries use MediaWiki and Wikidata,
 scholarly queries use arXiv, and archival URL lookups use the latest Common Crawl index. Results are normalized,
-deduplicated, and blended round-robin with SearXNG or DuckDuckGo so one provider cannot occupy every result slot.
-Each result retains its provider and engine provenance. A specialized provider failure is reported in
-`provider_notes` and does not prevent the remaining providers from returning results.
+deduplicated, blended round-robin with SearXNG or DuckDuckGo so one provider cannot occupy every result slot, and
+then re-ranked by lexical (BM25) relevance to the query so the most on-topic results lead. Each result retains its
+provider and engine provenance. A specialized provider failure is reported in `provider_notes` and does not
+prevent the remaining providers from returning results.
 
 `web_research` accepts `query`, `max_sources`, `min_sources`, `language`, `time_range`, `safe_search`, and
-SearXNG `categories`. It prefers one source per registrable domain, ranks candidates using search position and
-bounded source signals, extracts the most query-relevant sentences, and returns citation-ready evidence with
-stable source IDs, titles, URLs, domains, publication and retrieval times, ranking details, and fetch failures.
+SearXNG `categories`. It prefers one source per registrable domain, ranks candidates using search position,
+bounded source-authority signals, and bounded lexical (BM25) relevance, extracts the most query-relevant
+sentences with the same BM25 scoring, and returns citation-ready evidence with stable source IDs, titles, URLs,
+domains, publication and retrieval times, ranking details, and fetch failures.
 
 The `corroboration` object separately reports the structural independent-source threshold and the semantic
 relationship found by claim analysis. After evidence selection, a bounded tool-free call to the local
@@ -89,7 +91,10 @@ web.research.claim-analysis.max-output-chars=50000
 `web_search` prefers the structured JSON API of a local SearXNG instance and falls back to DuckDuckGo HTML when
 SearXNG is unavailable or returns no results. Query-aware providers are then blended when the classifier selects
 them. The tool supports `query`, `max_results`, `language`, `time_range`, `page`, `safe_search`, and SearXNG
-`categories`. Results are returned as JSON with detected `query_intents`, rank, provider, engine, title, URL,
+`categories`. To improve ordering it gathers a larger candidate pool than requested, then returns the
+`max_results` best after re-ranking every candidate by lexical (BM25) relevance to the query; ties keep the
+providers' original order, so a query with no lexical overlap degrades gracefully to the previous behavior.
+Results are returned as JSON with detected `query_intents`, relevance rank, provider, engine, title, URL,
 snippet, optional publication date, retrieval time, cache status, and provider diagnostics. Transient failures
 are retried with bounded backoff, oversized responses are rejected, and successful searches are cached.
 

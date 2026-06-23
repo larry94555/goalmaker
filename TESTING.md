@@ -355,7 +355,7 @@ Run the complete deterministic suite. It makes no public-network calls:
 Run only fetch and research tests while iterating:
 
 ```bat
-.\mvnw.cmd -B -ntp "-Dtest=ClaimAnalysisServiceTest,WebFetchToolProviderTest,WebResearchToolProviderTest,FetchWorkerClientTest,PinnedDnsTest,FetchBudgetTest" test
+.\mvnw.cmd -B -ntp "-Dtest=ClaimAnalysisServiceTest,WebFetchToolProviderTest,WebResearchToolProviderTest,WebSearchToolProviderTest,LexicalRankerTest,FetchWorkerClientTest,PinnedDnsTest,FetchBudgetTest" test
 ```
 
 Run the opt-in public integration suite with local SearXNG available:
@@ -383,6 +383,8 @@ This checklist was reviewed against the current web-search implementation and ro
 | SearXNG JSON search, retries, deduplication, cache | Prompts 1 and 13 | `WebSearchToolProviderTest` |
 | DuckDuckGo fallback | Outage test | `WebSearchToolProviderTest` |
 | Language, recency, paging, safe search, categories | Prompt 7 | `WebSearchToolProviderTest` request assertions |
+| Lexical (BM25) re-ranking of search results | Prompts 1 and 6 | `WebSearchToolProviderTest`, `LexicalRankerTest` |
+| Relevance-ranked research candidates and excerpt sentences | Prompts 1 and 6 | `WebResearchToolProviderTest`, `LexicalRankerTest` |
 | News via GDELT | Prompt 2 | `SpecializedSearchServiceTest` |
 | Entities via MediaWiki and Wikidata | Prompt 3 | `SpecializedSearchServiceTest` |
 | Scholarly results via arXiv | Prompt 4 | `SpecializedSearchServiceTest` |

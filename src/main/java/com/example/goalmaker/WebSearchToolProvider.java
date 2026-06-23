@@ -87,7 +87,8 @@ public class WebSearchToolProvider {
         schema.put("required", List.of("query"));
         return List.of(new ToolDefinition(
                 "web_search",
-                "Search the web using local SearXNG with resilient DuckDuckGo fallback. Returns structured, sourced results.",
+                "Search the web using local SearXNG with resilient DuckDuckGo fallback. Returns structured, "
+                        + "relevance-ranked, sourced results.",
                 schema,
                 "builtin:web_search",
                 true,
@@ -108,6 +109,7 @@ public class WebSearchToolProvider {
             return payload;
         }
 
+        int candidatePool = candidatePool(request.maxResults());
         List<String> attempted = new ArrayList<>();
         List<String> errors = new ArrayList<>();
         List<SearchProvider> providers = providers(errors);
@@ -117,7 +119,7 @@ public class WebSearchToolProvider {
             attempted.add(provider.name());
             long started = System.nanoTime();
             try {
-                List<SearchResult> results = deduplicate(provider.search(request), request.maxResults());
+                List<SearchResult> results = deduplicate(provider.search(request), candidatePool);
                 if ("searxng".equals(provider.name()) && searxngHealth != null) {
                     searxngHealth.recordSearchSuccess(elapsedMillis(started));
                 }
@@ -144,7 +146,8 @@ public class WebSearchToolProvider {
         attempted.addAll(specialized.attemptedProviders());
         errors.addAll(specialized.notes());
         List<SearchResult> generalResults = selected;
-        selected = blend(specialized.results(), generalResults, request.maxResults());
+        List<SearchResult> blended = blend(specialized.results(), generalResults, candidatePool);
+        selected = rankByRelevance(request.query(), blended, request.maxResults());
         if (!specialized.results().isEmpty()) {
             selectedProvider = generalResults.isEmpty() ? "specialized" : "blended";
         }
@@ -247,6 +250,42 @@ public class WebSearchToolProvider {
             cache.keySet().stream().findFirst().ifPresent(cache::remove);
         }
         cache.put(key, new CacheEntry(Map.copyOf(payload), now.plusSeconds(cacheTtlSeconds)));
+    }
+
+    private static int candidatePool(int maxResults) {
+        return Math.min(30, Math.max(maxResults, maxResults * 3));
+    }
+
+    /**
+     * Reorders the deduplicated candidates by BM25 relevance to the query and keeps the best
+     * {@code maximum}. Ties preserve the providers' original ordering, so a query with no lexical
+     * overlap (or a single result) degrades gracefully to the previous behavior.
+     */
+    private static List<SearchResult> rankByRelevance(String query, List<SearchResult> results, int maximum) {
+        if (results.size() <= 1) {
+            return results.size() <= maximum ? List.copyOf(results) : List.copyOf(results.subList(0, maximum));
+        }
+        List<String> documents = new ArrayList<>(results.size());
+        for (SearchResult result : results) {
+            documents.add((result.title() + " " + result.snippet()).trim());
+        }
+        LexicalRanker ranker = LexicalRanker.forDocuments(documents);
+        double[] scores = new double[results.size()];
+        for (int index = 0; index < results.size(); index++) {
+            scores[index] = ranker.score(query, index);
+        }
+        List<Integer> order = new ArrayList<>();
+        for (int index = 0; index < results.size(); index++) order.add(index);
+        order.sort((left, right) -> {
+            int comparison = Double.compare(scores[right], scores[left]);
+            return comparison != 0 ? comparison : Integer.compare(left, right);
+        });
+        List<SearchResult> ranked = new ArrayList<>();
+        for (int index : order) {
+            ranked.add(results.get(index));
+            if (ranked.size() >= maximum) break;
+        }
+        return List.copyOf(ranked);
     }
 
     private static List<SearchResult> deduplicate(List<SearchResult> results, int maximum) {

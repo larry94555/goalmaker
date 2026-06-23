@@ -70,6 +70,9 @@ final class DuckDuckGoSearchProvider implements SearchProvider {
         }
 
         Document document = Jsoup.parse(response.body(), url.toString());
+        // Collect a larger candidate pool than is finally returned so the caller can re-rank by
+        // relevance; a single DuckDuckGo HTML page already carries these rows at no extra request.
+        int limit = Math.max(request.maxResults(), Math.min(50, request.maxResults() * 3));
         List<SearchResult> results = new ArrayList<>();
         for (Element result : document.select("div.result")) {
             Element link = result.selectFirst("a.result__a");
@@ -83,7 +86,7 @@ final class DuckDuckGoSearchProvider implements SearchProvider {
                     timestamp == null ? "" : timestamp.text().trim(),
                     name(),
                     name()));
-            if (results.size() >= request.maxResults()) break;
+            if (results.size() >= limit) break;
         }
         return List.copyOf(results);
     }

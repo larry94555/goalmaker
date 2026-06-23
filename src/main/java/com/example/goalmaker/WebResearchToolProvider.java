@@ -23,10 +23,6 @@ import java.util.concurrent.TimeUnit;
 
 @Component
 public class WebResearchToolProvider {
-    private static final Set<String> STOP_WORDS = Set.of(
-            "about", "after", "before", "from", "have", "into", "latest", "most", "that", "their",
-            "then", "there", "these", "they", "this", "what", "when", "where", "which", "with", "would");
-
     @Value("${web.research.default-max-sources:3}") private int defaultMaxSources = 3;
     @Value("${web.research.default-min-sources:2}") private int defaultMinSources = 2;
     @Value("${web.research.candidate-multiplier:2}") private int candidateMultiplier = 2;
@@ -95,7 +91,7 @@ public class WebResearchToolProvider {
         if (!request.categories().isEmpty()) searchArguments.put("categories", request.categories());
 
         Map<String, Object> searchPayload = search.searchPayload(searchArguments);
-        List<Candidate> candidates = selectCandidates(searchResults(searchPayload), candidateCount);
+        List<Candidate> candidates = selectCandidates(searchResults(searchPayload), candidateCount, request.query());
         List<FetchOutcome> outcomes = fetchCandidates(candidates, request);
         List<Map<String, Object>> fetchedEvidence = outcomes.stream()
                 .filter(outcome -> outcome.evidence() != null)
@@ -281,13 +277,24 @@ public class WebResearchToolProvider {
         }
     }
 
-    private static List<Candidate> selectCandidates(List<Map<String, Object>> results, int maximum) {
-        List<Candidate> ranked = new ArrayList<>();
+    private static List<Candidate> selectCandidates(List<Map<String, Object>> results, int maximum, String query) {
+        List<String> documents = new ArrayList<>(results.size());
         for (Map<String, Object> item : results) {
+            documents.add((string(item.get("title")) + " " + string(item.get("snippet"))).trim());
+        }
+        LexicalRanker ranker = LexicalRanker.forDocuments(documents);
+        List<Candidate> ranked = new ArrayList<>();
+        for (int index = 0; index < results.size(); index++) {
+            Map<String, Object> item = results.get(index);
             String url = string(item.get("url"));
             String domain = domain(url);
             if (url.isBlank() || domain.isBlank()) continue;
             int rank = integer(item.get("rank"), ranked.size() + 1);
+            // Authority remains the dominant signal; lexical relevance is bounded so an on-topic page
+            // is promoted among comparable sources without overriding strong domain authority.
+            int relevance = Math.min(25, (int) Math.round(ranker.score(query, index) * 6));
+            int score = sourceScore(rank, url, domain, string(item.get("title")),
+                    string(item.get("published_at"))) + relevance;
             Candidate candidate = new Candidate(
                     rank,
                     string(item.get("title")),
@@ -296,7 +303,7 @@ public class WebResearchToolProvider {
                     string(item.get("published_at")),
                     string(item.get("provider")),
                     string(item.get("engine")),
-                    sourceScore(rank, url, domain, string(item.get("title")), string(item.get("published_at"))));
+                    score);
             ranked.add(candidate);
         }
         ranked.sort(Comparator.comparingInt(Candidate::sourceScore).reversed()
@@ -328,43 +335,42 @@ public class WebResearchToolProvider {
 
     private static Excerpt excerpt(String content, String query) {
         if (content.isBlank()) return new Excerpt("", 0);
-        Set<String> terms = queryTerms(query);
-        String[] sentences = content.split("(?<=[.!?])\\s+");
-        List<Sentence> ranked = new ArrayList<>();
-        for (int index = 0; index < sentences.length; index++) {
-            String sentence = sentences[index].trim();
-            if (!sentence.isBlank()) ranked.add(new Sentence(index, sentence, sentenceScore(sentence, terms)));
+        List<Sentence> sentences = new ArrayList<>();
+        String[] raw = content.split("(?<=[.!?])\\s+");
+        for (int index = 0; index < raw.length; index++) {
+            String sentence = raw[index].trim();
+            if (!sentence.isBlank()) sentences.add(new Sentence(index, sentence));
         }
-        ranked.sort(Comparator.comparingInt(Sentence::score).reversed()
-                .thenComparingInt(Sentence::index));
-        List<Sentence> selected = ranked.stream().limit(3)
-                .sorted(Comparator.comparingInt(Sentence::index)).toList();
+        if (sentences.isEmpty()) {
+            String fallback = content.substring(0, Math.min(content.length(), 900));
+            return new Excerpt(fallback, LexicalRanker.termCoverage(query, fallback) * 10);
+        }
+        // Rank the candidate sentences with BM25 so the excerpt surfaces the most query-relevant
+        // evidence the model will read, then restore reading order for the selected sentences.
+        LexicalRanker ranker = LexicalRanker.forDocuments(
+                sentences.stream().map(Sentence::text).toList());
+        double[] scores = new double[sentences.size()];
+        for (int index = 0; index < sentences.size(); index++) scores[index] = ranker.score(query, index);
+        List<Integer> order = new ArrayList<>();
+        for (int index = 0; index < sentences.size(); index++) order.add(index);
+        order.sort((left, right) -> {
+            int comparison = Double.compare(scores[right], scores[left]);
+            return comparison != 0 ? comparison
+                    : Integer.compare(sentences.get(left).index(), sentences.get(right).index());
+        });
+        List<Integer> top = new ArrayList<>(order.subList(0, Math.min(3, order.size())));
+        top.sort(Comparator.comparingInt(index -> sentences.get(index).index()));
         StringBuilder text = new StringBuilder();
-        int relevance = 0;
-        for (Sentence sentence : selected) {
+        for (int index : top) {
+            String sentence = sentences.get(index).text();
             if (text.length() > 0) text.append(" ");
             int remaining = 900 - text.length();
             if (remaining <= 0) break;
-            text.append(sentence.text(), 0, Math.min(sentence.text().length(), remaining));
-            relevance += sentence.score();
+            text.append(sentence, 0, Math.min(sentence.length(), remaining));
         }
-        if (text.isEmpty()) text.append(content, 0, Math.min(content.length(), 900));
-        return new Excerpt(text.toString(), relevance);
-    }
-
-    private static Set<String> queryTerms(String query) {
-        Set<String> terms = new LinkedHashSet<>();
-        for (String token : query.toLowerCase(Locale.ROOT).split("[^a-z0-9]+")) {
-            if (token.length() >= 3 && !STOP_WORDS.contains(token)) terms.add(token);
-        }
-        return terms;
-    }
-
-    private static int sentenceScore(String sentence, Set<String> terms) {
-        String normalized = sentence.toLowerCase(Locale.ROOT);
-        int score = 0;
-        for (String term : terms) if (normalized.contains(term)) score += 10;
-        return score;
+        String excerpt = text.isEmpty()
+                ? content.substring(0, Math.min(content.length(), 900)) : text.toString();
+        return new Excerpt(excerpt, LexicalRanker.termCoverage(query, excerpt) * 10);
     }
 
     private static int sourceScore(int rank, String url, String domain, String title, String publishedAt) {
@@ -489,5 +495,5 @@ public class WebResearchToolProvider {
 
     private record Excerpt(String text, int relevanceScore) {}
 
-    private record Sentence(int index, String text, int score) {}
+    private record Sentence(int index, String text) {}
 }
