@@ -32,22 +32,32 @@ public class WebSearchToolProvider {
 
     private final ObjectMapper mapper;
     private final WebHttpClient http;
+    private final SpecializedSearchService specializedSearch;
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
     public WebSearchToolProvider() {
-        this(new ObjectMapper());
+        this(new ObjectMapper(), (SpecializedSearchService) null);
+    }
+
+    public WebSearchToolProvider(ObjectMapper mapper) {
+        this(mapper, (SpecializedSearchService) null);
     }
 
     @Autowired
-    public WebSearchToolProvider(ObjectMapper mapper) {
-        this(mapper, HttpClient.newBuilder()
+    public WebSearchToolProvider(ObjectMapper mapper, SpecializedSearchService specializedSearch) {
+        this(mapper, specializedSearch, HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .connectTimeout(Duration.ofSeconds(10))
                 .build());
     }
 
     WebSearchToolProvider(ObjectMapper mapper, HttpClient client) {
+        this(mapper, null, client);
+    }
+
+    WebSearchToolProvider(ObjectMapper mapper, SpecializedSearchService specializedSearch, HttpClient client) {
         this.mapper = mapper;
+        this.specializedSearch = specializedSearch;
         this.http = new WebHttpClient(client);
     }
 
@@ -109,7 +119,20 @@ public class WebSearchToolProvider {
             }
         }
 
-        Map<String, Object> payload = payload(request, selectedProvider, attempted, errors, selected);
+        SpecializedSearchService.SearchOutcome specialized = specializedSearch == null
+                ? new SpecializedSearchService.SearchOutcome(
+                        QueryIntentClassifier.classify(request).stream().map(SearchIntent::value).toList(),
+                        List.of(), List.of(), List.of())
+                : specializedSearch.search(request);
+        attempted.addAll(specialized.attemptedProviders());
+        errors.addAll(specialized.notes());
+        List<SearchResult> generalResults = selected;
+        selected = blend(specialized.results(), generalResults, request.maxResults());
+        if (!specialized.results().isEmpty()) {
+            selectedProvider = generalResults.isEmpty() ? "specialized" : "blended";
+        }
+
+        Map<String, Object> payload = payload(request, selectedProvider, attempted, errors, selected, specialized);
         if (!selected.isEmpty()) cache(request.cacheKey(), payload);
         return payload;
     }
@@ -128,11 +151,19 @@ public class WebSearchToolProvider {
     }
 
     private Map<String, Object> payload(SearchRequest request, String provider, List<String> attempted,
-                                        List<String> errors, List<SearchResult> results) {
+                                        List<String> errors, List<SearchResult> results,
+                                        SpecializedSearchService.SearchOutcome specialized) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("query", request.query());
         payload.put("provider", provider);
+        payload.put("query_intents", specialized.intents());
         payload.put("providers_attempted", attempted);
+        if (!specialized.attemptedProviders().isEmpty()) {
+            payload.put("specialized_providers_attempted", specialized.attemptedProviders());
+        }
+        if (!specialized.cachedProviders().isEmpty()) {
+            payload.put("specialized_providers_cached", specialized.cachedProviders());
+        }
         payload.put("cached", false);
         payload.put("retrieved_at", Instant.now().toString());
         payload.put("result_count", results.size());
@@ -152,6 +183,35 @@ public class WebSearchToolProvider {
         payload.put("results", serialized);
         if (!errors.isEmpty()) payload.put("provider_notes", errors);
         return payload;
+    }
+
+    private static List<SearchResult> blend(List<SearchResult> specialized,
+                                             List<SearchResult> general,
+                                             int maximum) {
+        if (specialized.isEmpty()) return deduplicate(general, maximum);
+        Map<String, List<SearchResult>> groups = new LinkedHashMap<>();
+        for (SearchResult result : specialized) {
+            groups.computeIfAbsent(result.provider(), ignored -> new ArrayList<>()).add(result);
+        }
+        if (!general.isEmpty()) groups.put("general-web", general);
+
+        List<SearchResult> blended = new ArrayList<>();
+        Set<String> urls = new LinkedHashSet<>();
+        int round = 0;
+        boolean added;
+        do {
+            added = false;
+            for (List<SearchResult> group : groups.values()) {
+                if (round >= group.size()) continue;
+                added = true;
+                SearchResult result = group.get(round);
+                String canonical = canonicalUrl(result.url());
+                if (!canonical.isBlank() && urls.add(canonical)) blended.add(result);
+                if (blended.size() >= maximum) return List.copyOf(blended);
+            }
+            round++;
+        } while (added);
+        return List.copyOf(blended);
     }
 
     private void cache(String key, Map<String, Object> payload) {

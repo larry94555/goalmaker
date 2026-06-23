@@ -14,55 +14,63 @@ answer, while `web_search` and `web_fetch` remain available for follow-up invest
 Source-threshold sufficiency is deliberately distinct from semantic agreement. The model must compare returned
 evidence and disclose conflicts; GoalMaker does not label two sources as agreeing merely because both were found.
 
+### Query-aware specialized providers
+
+Queries are now classified into general, current-news, factual-entity, scholarly, and archival intents. GDELT,
+MediaWiki/Wikidata, arXiv, and Common Crawl are routed automatically and blended with the general search path.
+Provider results use the existing normalized result format, retain provenance, and are deduplicated before
+evidence selection.
+
+Each specialized provider has bounded retries, independent rate limiting and caching, response limits, and
+non-fatal fallback behavior. Deterministic tests cover intent selection, provider parsing, caching, failure
+isolation, and source-diversity improvement over the general-search baseline. Opt-in tests verify the supported
+public endpoints without making the normal suite network-dependent.
+
 ## Next Recommended Change
 
-### 1. Query-aware specialized providers
-
-Route current-news queries to GDELT, factual entity queries to MediaWiki/Wikidata, scholarly queries to arXiv,
-and archival URL lookups to Common Crawl. Normalize these token-free sources into the existing search result and
-evidence formats, then merge them with SearXNG while preserving provider provenance.
-
-This is the next recommended high-value change because specialized structured sources improve freshness,
-authority, and coverage where general web ranking and HTML extraction are weakest.
-
-Completion criteria:
-
-- classify queries into general, current-news, factual-entity, scholarly, and archival intents
-- route each intent to appropriate token-free providers with bounded fallback behavior
-- normalize provider-specific dates, identifiers, URLs, snippets, and provenance
-- deduplicate specialized and general-web results before evidence selection
-- apply provider-specific rate limits, retries, and caching
-- evaluate result relevance and source diversity against the existing general-search baseline
-
-## Later Priorities
-
-### 2. Managed SearXNG lifecycle and health
+### 1. Managed SearXNG lifecycle and health
 
 Add startup health checks, provider readiness reporting, failure metrics, and optional GoalMaker-managed SearXNG
 startup. Surface provider status without delaying every query when the local service is intentionally disabled.
 
-### 3. Better document extraction
+This is the next recommended high-value change because SearXNG remains the broadest token-free discovery source.
+Fast readiness detection and actionable diagnostics reduce avoidable fallback latency and make search failures
+substantially easier to identify and recover from.
+
+Completion criteria:
+
+- probe configured SearXNG readiness at startup and on a bounded background interval
+- distinguish disabled, starting, healthy, degraded, and unavailable states
+- expose status, last success, latency, and recent failure reason through an application health endpoint
+- skip known-unavailable SearXNG calls during a short circuit-breaker window while retaining recovery probes
+- optionally start the repository Docker Compose service when explicitly enabled
+- keep DuckDuckGo and specialized providers available throughout SearXNG startup or failure
+- test healthy, slow, malformed, unavailable, recovery, and intentionally-disabled states
+
+## Later Priorities
+
+### 2. Better document extraction
 
 Add PDF text extraction, metadata and publication-date detection, canonical URL handling, robots-policy support,
 and a readability-oriented HTML extractor with per-site fallback rules.
 
-### 4. Stronger fetch isolation
+### 3. Stronger fetch isolation
 
 Move web fetching into a restricted process or container with network egress controls. Pin DNS resolution through
 the connection to close rebinding gaps, restrict ports, and apply total request budgets across redirects.
 
-### 5. Claim-level agreement and conflict analysis
+### 4. Claim-level agreement and conflict analysis
 
 Use the local model to extract comparable claims from evidence, identify material agreement or contradiction,
 and attach source references to each finding. Keep retrieval facts separate from model judgments and expose
 uncertainty explicitly.
 
-### 6. Search quality evaluation
+### 5. Search quality evaluation
 
 Maintain a versioned set of factual, current, technical, multilingual, and adversarial queries. Track provider
 availability, precision, source diversity, latency, cache effectiveness, and citation correctness over time.
 
-### 7. Optional independent local index
+### 6. Optional independent local index
 
 Evaluate YaCy or a focused local crawler for private corpora, intranet search, and resilience when public search
 providers are unavailable. Keep it optional because crawling and index maintenance have substantial resource cost.
