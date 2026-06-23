@@ -13,14 +13,10 @@ import java.util.concurrent.ConcurrentHashMap;
 final class RobotsPolicy {
     private static final String USER_AGENT = "goalmaker";
 
-    private final WebHttpClient http;
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
-    RobotsPolicy(WebHttpClient http) {
-        this.http = http;
-    }
-
-    Decision check(URI target, Settings settings, UrlValidator validator) {
+    Decision check(URI target, Settings settings, UrlValidator validator, FetchHttpClient http,
+                   FetchBudget budget) {
         if (!settings.enabled()) return new Decision(true, "disabled", "", false, "");
         URI robotsUrl = robotsUri(target);
         String key = origin(robotsUrl);
@@ -29,7 +25,7 @@ final class RobotsPolicy {
             return decision(cached.policy(), target, true);
         }
 
-        LoadedPolicy policy = load(robotsUrl, settings, validator);
+        LoadedPolicy policy = load(robotsUrl, settings, validator, http, budget);
         if (!settings.cacheTtl().isZero() && !settings.cacheTtl().isNegative()
                 && settings.cacheMaxEntries() > 0) {
             Instant now = Instant.now();
@@ -42,17 +38,18 @@ final class RobotsPolicy {
         return decision(policy, target, false);
     }
 
-    private LoadedPolicy load(URI robotsUrl, Settings settings, UrlValidator validator) {
+    private LoadedPolicy load(URI robotsUrl, Settings settings, UrlValidator validator,
+                              FetchHttpClient http, FetchBudget budget) {
         SimpleRobotRulesParser parser = new SimpleRobotRulesParser();
         URI current = robotsUrl;
         try {
             for (int redirect = 0; redirect <= settings.maxRedirects(); redirect++) {
                 validator.validate(current);
-                WebHttpClient.BinaryResponse response = http.getBytes(current, "text/plain, */*;q=0.1",
+                FetchHttpClient.Response response = http.getBytes(current, "text/plain, */*;q=0.1",
                         settings.timeout(), settings.maxAttempts(), settings.retryDelayMillis(),
-                        settings.maxResponseBytes());
+                        settings.maxResponseBytes(), budget);
                 if (redirect(response.status())) {
-                    String location = response.headers().firstValue("Location")
+                    String location = response.firstHeader("Location")
                             .orElseThrow(() -> new IllegalStateException(
                                     "robots.txt redirect had no Location header"));
                     current = current.resolve(location);
@@ -62,7 +59,7 @@ final class RobotsPolicy {
                     continue;
                 }
                 if (response.status() / 100 == 2 && !response.truncated()) {
-                    String contentType = response.headers().firstValue("Content-Type").orElse("text/plain");
+                    String contentType = response.firstHeader("Content-Type").orElse("text/plain");
                     BaseRobotRules rules = parser.parseContent(current.toString(), response.body(),
                             contentType, List.of(USER_AGENT));
                     return new LoadedPolicy(rules, "rules", robotsUrl.toString(), "");

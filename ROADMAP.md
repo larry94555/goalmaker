@@ -50,41 +50,69 @@ author, dates, page counts, and metadata conflicts. Deterministic tests cover re
 text, metadata conflicts, robots exclusions and caching, valid and malformed PDFs, byte and page limits,
 redirects, private targets, and provenance propagation.
 
+### Process-isolated fetch workers
+
+Web fetching and HTML/PDF parsing now run outside Spring Boot in a bounded pool of dedicated JVM workers.
+Workers have configured heap, metaspace, code-cache, processor, wall-clock, and output limits. A crash, timeout,
+or protocol violation discards the worker, and the pool creates a clean replacement without taking down the
+application. Healthy workers are reused to preserve concurrency and robots caches.
+
+Each fetch uses a request-local pinned DNS resolver that validates public addresses once and supplies those same
+addresses to a direct, no-proxy HTTP connection. Destination ports are allowlisted, decompressed bytes are bounded, and
+one time and HTTP-request budget covers robots checks, retries, redirects, downloads, and parsing. Fetch and
+research provenance report the active network policy and process-isolation limits.
+
+Tests cover DNS rebinding simulation, private addresses, unapproved ports, redirects, shared request exhaustion,
+slow streams, compressed expansion, parser-process crashes, wall-clock termination, oversized worker output,
+worker reuse, and automatic recovery.
+
+### Container-enforced worker sandbox
+
+GoalMaker now provides explicit `process` and `docker` fetch-worker modes. Docker mode preserves the worker
+protocol while adding hard total-memory/swap, CPU, PID, file-descriptor, read-only-filesystem, tmpfs, and
+no-new-privileges controls. It uses no host mounts and automatically removes stopped containers.
+
+The container entrypoint installs an outbound firewall, then changes to an unprivileged UID and erases its
+capability bounding set before Java starts. IPv6 is disabled; DNS is allowed only to Docker-provided resolvers;
+private and reserved IPv4 ranges are rejected; and all remaining egress is limited to TCP ports 80 and 443.
+Application-level pinned DNS, robots policy, destination-port checks, and total request budgets remain active as
+an independent layer.
+
+Docker images can be built automatically on first use. A source fingerprint label avoids rebuilding a matching
+image, while build logs and worker health/restart counters remain visible. Tests audit hardened launch flags and
+exercise a real Docker image, HostConfig limits, successful public fetching, and an intentionally permissive
+application request that is still blocked by the container firewall. The live test also verifies the Java UID,
+empty effective capability set, no-new-privileges state, and read-only root filesystem.
+
 ## Next Recommended Change
 
-### 1. Stronger fetch isolation
+### 1. Claim-level agreement and conflict analysis
 
-Move web fetching and document parsing into a restricted process or container with network egress controls. Pin
-DNS resolution through the connection to close rebinding gaps, restrict destination ports, and apply a total
-request budget across robots checks, redirects, downloads, and parsing.
+Use the local model to extract comparable claims from fetched evidence, identify material agreement or
+contradiction, and attach source references to every finding. Keep retrieved facts separate from model judgments,
+represent uncertainty explicitly, and never infer agreement merely because the source threshold was met.
 
-This is now the highest-value remaining improvement because GoalMaker processes arbitrary public documents. The
-current in-process checks substantially reduce risk, but process isolation provides a stronger boundary against
-malformed documents, parser vulnerabilities, DNS rebinding, and resource exhaustion without requiring a paid
-service or API token.
+This is the highest-value remaining answer-quality improvement because discovery, extraction, and isolation are
+now broad and resilient, while corroboration still measures source structure rather than whether sources support
+the same claims.
 
 Completion criteria:
 
-- run fetch and parsing work outside the Spring Boot process with strict CPU, memory, wall-clock, and output limits
-- permit only public HTTP(S) egress on approved ports and bind the validated DNS result to the connection
-- enforce one total budget across robots checks and all redirects instead of independent per-request budgets
-- preserve the current structured fetch result and error contract
-- test DNS rebinding, redirect loops, slow streams, decompression bombs, parser crashes, and worker recovery
+- extract concise, normalized claims with source and excerpt references
+- group only genuinely comparable claims and label support, contradiction, partial overlap, or insufficient evidence
+- separate deterministic retrieval facts from local-model interpretations in the result schema
+- preserve minority and conflicting evidence instead of collapsing to a majority answer
+- include uncertainty, source quality, and missing-evidence notes for every assessment
+- test clear agreement, direct contradiction, date/version drift, incomparable claims, and unsupported model output
 
 ## Later Priorities
 
-### 2. Claim-level agreement and conflict analysis
-
-Use the local model to extract comparable claims from evidence, identify material agreement or contradiction,
-and attach source references to each finding. Keep retrieval facts separate from model judgments and expose
-uncertainty explicitly.
-
-### 3. Search quality evaluation
+### 2. Search quality evaluation
 
 Maintain a versioned set of factual, current, technical, multilingual, and adversarial queries. Track provider
 availability, precision, source diversity, latency, cache effectiveness, and citation correctness over time.
 
-### 4. Optional independent local index
+### 3. Optional independent local index
 
 Evaluate YaCy or a focused local crawler for private corpora, intranet search, and resilience when public search
 providers are unavailable. Keep it optional because crawling and index maintenance have substantial resource cost.

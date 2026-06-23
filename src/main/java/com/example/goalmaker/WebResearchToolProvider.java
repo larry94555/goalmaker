@@ -218,6 +218,8 @@ public class WebResearchToolProvider {
             putIfPresent(item, "page_count", fetched.get("page_count"));
             putIfPresent(item, "pages_extracted", fetched.get("pages_extracted"));
             putIfPresent(item, "metadata_conflicts", fetched.get("metadata_conflicts"));
+            putIfPresent(item, "fetch_policy", fetched.get("fetch_policy"));
+            putIfPresent(item, "fetch_isolation", fetched.get("fetch_isolation"));
             item.put("retrieved_at", fetched.get("retrieved_at"));
             item.put("excerpt", excerpt.text());
             item.put("relevance_score", excerpt.relevanceScore());

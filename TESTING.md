@@ -113,8 +113,9 @@ evidence. Missing metadata should be reported as unavailable, not invented.
 ask.bat "Fetch and inspect the exact PDF https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf . State its extracted text and report content type, extraction method, title, author, page count, pages extracted, and any truncation reason."
 ```
 
-Expected: the answer includes `Dummy PDF file`, `application/pdf`, `pdfbox`, and page provenance. Title or author
-may be absent because the source PDF may not provide them.
+Expected: the answer includes `Dummy PDF file`, `application/pdf`, `pdfbox`, and page provenance. Ask the model
+to report `fetch_isolation.mode=worker-process`, `fetch_policy.dns_pinned=true`, allowed ports, and total budgets.
+Title or author may be absent because the source PDF may not provide them.
 
 For a substantive PDF, use:
 
@@ -208,6 +209,103 @@ To test optional managed startup, stop SearXNG, set `web.search.searxng-manage=t
 the health endpoint. Expected: Spring Boot starts without waiting for search, health moves from `starting` to
 `healthy` or `degraded`, and Compose output is written to `searxng-compose.log`.
 
+## Fetch Isolation Tests
+
+### Worker process and policy provenance
+
+```bat
+ask.bat "Fetch https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf and report the fetch_isolation and fetch_policy objects exactly, followed by the extracted text."
+```
+
+Expected: `fetch_isolation.mode` is `worker-process` with the default configuration, or `worker-docker` when
+Docker mode is selected. Enabled is true; pool, resource, wall-clock, output, and worker status fields are present.
+`fetch_policy.dns_pinned` is true, allowed ports are 80 and 443, and total time and HTTP request budgets are
+present.
+
+While GoalMaker is running, worker JVMs can be observed with PowerShell:
+
+```powershell
+Get-CimInstance Win32_Process | Where-Object CommandLine -Match 'FetchWorkerMain' | Select-Object ProcessId, CommandLine
+```
+
+Workers are started lazily. Run a fetch prompt first. Healthy workers remain available for reuse and are stopped
+when GoalMaker exits.
+
+### Docker-enforced worker
+
+Set the following and restart GoalMaker:
+
+```properties
+web.fetch.worker.mode=docker
+web.fetch.worker.docker.auto-build=true
+```
+
+Run the policy-provenance prompt again. Expected: `fetch_isolation.mode=worker-docker`; total memory, CPU, PID,
+tmpfs, read-only-root, capability, no-new-privileges, firewall, build, and worker-health fields are present. The
+first request may build the image and writes progress to `fetch-worker-docker-build.log`. A matching source
+fingerprint skips subsequent builds.
+
+Inspect the running container after a fetch:
+
+```powershell
+docker ps --filter "label=com.example.goalmaker.component=fetch-worker"
+docker inspect $(docker ps -q --filter "label=com.example.goalmaker.component=fetch-worker")
+```
+
+Expected HostConfig: read-only root, memory and memory-swap limits, NanoCpus, PidsLimit, `/tmp` tmpfs,
+`no-new-privileges`, all capabilities dropped with only startup `NET_ADMIN`, `SETUID`, `SETGID`, and `SETPCAP`
+added. The entrypoint removes those capabilities before Java starts.
+
+Run the real Docker integration test:
+
+```bat
+.\mvnw.cmd -B -ntp "-Dgoalmaker.live-docker-worker-test=true" "-Dtest=DockerFetchWorkerLiveTest" test
+```
+
+Expected: the image builds or matches its fingerprint, a public fetch succeeds, HostConfig limits are verified,
+Java reports UID 65532, zero effective capabilities, and `NoNewPrivs=1`, a root-filesystem write fails, and a
+deliberately permissive request to `host.docker.internal` never reaches the host test server because the container
+firewall rejects private/high-port egress.
+
+### Unapproved destination port
+
+```bat
+ask.bat "Fetch the exact URL https://example.com:8443/ and do not substitute another URL."
+```
+
+Expected: the fetch is rejected with `url port 8443 is not allowed` before a connection is attempted.
+
+### Private address through DNS
+
+```bat
+ask.bat "Fetch the exact URL http://localhost/ and do not use another source."
+```
+
+Expected: the fetch is rejected because the hostname resolves to a private or local address. The deterministic
+suite also simulates a DNS answer changing from public to private and verifies that only the first validated
+address set is ever supplied to the connection layer.
+
+### Worker failure and recovery
+
+Crash, hang, oversized output, and recovery paths use a deterministic fake worker rather than an external web
+page. Run:
+
+```bat
+.\mvnw.cmd -B -ntp "-Dtest=FetchWorkerClientTest" test
+```
+
+Expected: one healthy worker is reused; a crash, wall-clock timeout, and oversized output each discard that
+worker; a clean replacement successfully handles the request immediately following every failure.
+
+### Network and parsing budgets
+
+```bat
+.\mvnw.cmd -B -ntp "-Dtest=WebFetchToolProviderTest,PinnedDnsTest,FetchBudgetTest" test
+```
+
+Expected: tests pass for shared robots/redirect request exhaustion, slow streaming termination, decompressed-size
+limits, redirect loops, private targets, unapproved ports, pinned DNS, PDF limits, and isolated-worker execution.
+
 ## Automated Tests
 
 Run the complete deterministic suite. It makes no public-network calls:
@@ -219,7 +317,7 @@ Run the complete deterministic suite. It makes no public-network calls:
 Run only fetch and research tests while iterating:
 
 ```bat
-.\mvnw.cmd -B -ntp "-Dtest=WebFetchToolProviderTest,WebResearchToolProviderTest" test
+.\mvnw.cmd -B -ntp "-Dtest=WebFetchToolProviderTest,WebResearchToolProviderTest,FetchWorkerClientTest,PinnedDnsTest,FetchBudgetTest" test
 ```
 
 Run the opt-in public integration suite with local SearXNG available:
@@ -230,6 +328,12 @@ Run the opt-in public integration suite with local SearXNG available:
 
 Public providers may throttle requests; a live failure is diagnostic and should be compared with the deterministic
 suite before treating it as a regression.
+
+Docker sandbox verification is intentionally separate because it requires Docker and may build an image:
+
+```bat
+.\mvnw.cmd -B -ntp "-Dgoalmaker.live-docker-worker-test=true" "-Dtest=DockerFetchWorkerLiveTest" test
+```
 
 ## Coverage Review
 
@@ -257,12 +361,24 @@ This checklist was reviewed against the current web-search implementation and ro
 | Redirect validation and redirect limit | Prompt 8 source dependent | `WebFetchToolProviderTest` |
 | Private/local target blocking | Prompt 12 | `WebFetchToolProviderTest` |
 | Byte, page, character, and parsing-time budgets | Prompt 9 | `WebFetchToolProviderTest`; timeout is enforced in implementation |
+| Isolated worker process and process-limit provenance | Fetch isolation prompt | `WebFetchToolProviderTest`, `FetchWorkerClientTest` |
+| Worker reuse, crash, timeout, output overflow, and recovery | Worker failure command | `FetchWorkerClientTest` |
+| Docker launch hardening and explicit process fallback | Docker worker section | `DockerWorkerCommandTest` |
+| Docker memory/CPU/PID/read-only/tmpfs/no-new-privileges controls | Docker worker section | `DockerFetchWorkerLiveTest` |
+| Container firewall independent of application policy | Docker worker section | `DockerFetchWorkerLiveTest` |
+| Source-fingerprinted managed image build | Docker worker section | `DockerFetchWorkerLiveTest` |
+| Worker health, start, failure, and build counters | Fetch isolation prompts | `FetchWorkerClientTest`, `DockerFetchWorkerLiveTest` |
+| DNS pinning and rebinding resistance | Private-address prompt | `PinnedDnsTest` |
+| Public destination-port allowlist | Unapproved-port prompt | `PinnedDnsTest` |
+| One total time and HTTP-request budget | Network budget command | `FetchBudgetTest`, `WebFetchToolProviderTest` |
+| Slow streams and decompressed-size expansion | Network budget command | `WebFetchToolProviderTest` |
 | Untrusted-content fencing and injection warning | All prompts | `WebFetchToolProviderTest`, `WebSearchToolProviderTest` |
 | Health states, metrics, circuit breaker, recovery | Outage test | `SearxngHealthManagerTest`, `WebSearchHealthControllerTest` |
 | Optional managed Compose startup | Managed-startup operation | `SearxngHealthManagerTest`, `WebSearchConfigurationTest` |
 | Live SearXNG and public-provider compatibility | Live command | `WebResearchLiveTest`, `SpecializedSearchLiveTest`, `SearxngHealthLiveTest` |
 
-The prompt suite covers every user-visible web-search capability. Network-sensitive cases also have deterministic
-fixtures, except the PDF timeout itself: production code enforces it with a cancellable bounded future, while the
-suite avoids a deliberately CPU-consuming PDF fixture. Stronger process-level resource enforcement remains the
-next roadmap item.
+The prompt suite covers every user-visible web-search capability. Network-sensitive and process-isolation cases
+have deterministic fixtures; Docker enforcement has an opt-in live test. The PDF timeout itself is enforced with
+a cancellable bounded future and a parent-enforced worker deadline, while the suite avoids a deliberately
+CPU-consuming PDF fixture. The next roadmap priority is claim-level semantic agreement and conflict analysis,
+because source-count sufficiency still does not prove that evidence supports the same claims.

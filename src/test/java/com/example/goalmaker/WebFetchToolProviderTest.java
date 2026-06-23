@@ -22,6 +22,7 @@ import java.util.GregorianCalendar;
 import java.util.Map;
 import java.util.TimeZone;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.GZIPOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -29,6 +30,42 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WebFetchToolProviderTest {
     private final ObjectMapper mapper = new ObjectMapper();
+
+    @Test
+    void fetchesThroughTheIsolatedWorkerAndReusesItsRobotsCache() throws Exception {
+        AtomicInteger robotsCalls = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/robots.txt", exchange -> {
+            robotsCalls.incrementAndGet();
+            send(exchange, 200, "text/plain", "User-agent: goalmaker\nAllow: /");
+        });
+        server.createContext("/one", exchange -> send(exchange, 200, "text/plain", "first worker page"));
+        server.createContext("/two", exchange -> send(exchange, 200, "text/plain", "second worker page"));
+        server.start();
+        WebFetchToolProvider provider = new WebFetchToolProvider(mapper);
+        try {
+            ReflectionTestUtils.setField(provider, "allowPrivateAddresses", true);
+            ReflectionTestUtils.setField(provider, "allowedPorts", "");
+            ReflectionTestUtils.setField(provider, "workerPoolSize", 1);
+            ReflectionTestUtils.setField(provider, "retryDelayMillis", 0L);
+            ReflectionTestUtils.setField(provider, "robotsRetryDelayMillis", 0L);
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+
+            JsonNode first = providerResult(provider, base + "/one");
+            JsonNode second = providerResult(provider, base + "/two");
+
+            assertEquals("first worker page", first.path("content").asText());
+            assertEquals("second worker page", second.path("content").asText());
+            assertEquals("worker-process", first.path("fetch_isolation").path("mode").asText());
+            assertTrue(first.path("fetch_policy").path("dns_pinned").asBoolean());
+            assertEquals(1, first.path("fetch_isolation").path("status").path("live_workers").asInt());
+            assertTrue(second.path("robots").path("cached").asBoolean());
+            assertEquals(1, robotsCalls.get());
+        } finally {
+            provider.close();
+            server.stop(0);
+        }
+    }
 
     @Test
     void followsValidatedRedirectAndExtractsMainContent() throws Exception {
@@ -46,6 +83,8 @@ class WebFetchToolProviderTest {
         try {
             WebFetchToolProvider provider = new WebFetchToolProvider(mapper);
             ReflectionTestUtils.setField(provider, "allowPrivateAddresses", true);
+            ReflectionTestUtils.setField(provider, "allowedPorts", "");
+            ReflectionTestUtils.setField(provider, "workerEnabled", false);
             ReflectionTestUtils.setField(provider, "retryDelayMillis", 0L);
             ToolCatalog catalog = catalog(provider);
             String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/start";
@@ -73,6 +112,8 @@ class WebFetchToolProviderTest {
         try {
             WebFetchToolProvider provider = new WebFetchToolProvider(mapper);
             ReflectionTestUtils.setField(provider, "allowPrivateAddresses", true);
+            ReflectionTestUtils.setField(provider, "allowedPorts", "");
+            ReflectionTestUtils.setField(provider, "workerEnabled", false);
             ToolCatalog catalog = catalog(provider);
             String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/large";
 
@@ -81,6 +122,91 @@ class WebFetchToolProviderTest {
             assertEquals(1_000, result.path("content").asText().length());
             assertTrue(result.path("truncated").asBoolean());
             assertEquals("character-limit", result.path("truncation_reasons").path(0).asText());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void boundsDecompressedResponseSize() throws Exception {
+        byte[] compressed = gzip("z".repeat(5_000));
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/compressed", exchange -> {
+            exchange.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
+            exchange.getResponseHeaders().add("Content-Encoding", "gzip");
+            exchange.sendResponseHeaders(200, compressed.length);
+            exchange.getResponseBody().write(compressed);
+            exchange.close();
+        });
+        server.start();
+        try {
+            WebFetchToolProvider provider = localProvider();
+            ReflectionTestUtils.setField(provider, "maxResponseBytes", 1_000);
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/compressed";
+
+            JsonNode result = providerResult(provider, url);
+
+            assertEquals(1_000, result.path("content").asText().length());
+            assertTrue(result.path("truncation_reasons").toString().contains("download-byte-limit"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void abortsSlowStreamingResponseWithinTotalBudget() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/robots.txt", exchange -> send(exchange, 200, "text/plain",
+                "User-agent: goalmaker\nAllow: /"));
+        server.createContext("/slow", exchange -> {
+            exchange.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
+            exchange.sendResponseHeaders(200, 0);
+            exchange.getResponseBody().write("partial".getBytes(StandardCharsets.UTF_8));
+            exchange.getResponseBody().flush();
+            try {
+                Thread.sleep(3_000);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.close();
+        });
+        server.start();
+        try {
+            WebFetchToolProvider provider = localProvider();
+            ReflectionTestUtils.setField(provider, "totalBudgetSeconds", 1);
+            ReflectionTestUtils.setField(provider, "maxAttempts", 1);
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/slow";
+            long started = System.nanoTime();
+
+            String result = catalog(provider).execute("web_fetch", Map.of("url", url));
+            long elapsedMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                    System.nanoTime() - started);
+
+            assertTrue(result.startsWith("ERROR:"));
+            assertTrue(elapsedMillis < 2_500, "slow fetch took " + elapsedMillis + " ms");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void sharesHttpRequestBudgetAcrossRobotsAndRedirects() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/start", exchange -> {
+            exchange.getResponseHeaders().add("Location", "/final");
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
+        });
+        server.createContext("/final", exchange -> send(exchange, 200, "text/plain", "final page"));
+        server.start();
+        try {
+            WebFetchToolProvider provider = localProvider();
+            ReflectionTestUtils.setField(provider, "maxHttpRequests", 2);
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/start";
+
+            String result = catalog(provider).execute("web_fetch", Map.of("url", url));
+
+            assertEquals("ERROR: web fetch HTTP request budget exceeded", result);
         } finally {
             server.stop(0);
         }
@@ -310,6 +436,7 @@ class WebFetchToolProviderTest {
     @Test
     void blocksPrivateNetworkTargetsByDefault() {
         WebFetchToolProvider provider = new WebFetchToolProvider(mapper);
+        ReflectionTestUtils.setField(provider, "workerEnabled", false);
         String result = catalog(provider).execute("web_fetch", Map.of("url", "http://127.0.0.1/private"));
         assertEquals("ERROR: url resolves to a private or local network address", result);
     }
@@ -324,6 +451,8 @@ class WebFetchToolProviderTest {
     private WebFetchToolProvider localProvider() {
         WebFetchToolProvider provider = new WebFetchToolProvider(mapper);
         ReflectionTestUtils.setField(provider, "allowPrivateAddresses", true);
+        ReflectionTestUtils.setField(provider, "allowedPorts", "");
+        ReflectionTestUtils.setField(provider, "workerEnabled", false);
         ReflectionTestUtils.setField(provider, "retryDelayMillis", 0L);
         ReflectionTestUtils.setField(provider, "robotsRetryDelayMillis", 0L);
         return provider;
@@ -376,5 +505,13 @@ class WebFetchToolProviderTest {
             document.save(output);
             return output.toByteArray();
         }
+    }
+
+    private static byte[] gzip(String value) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (GZIPOutputStream gzip = new GZIPOutputStream(output)) {
+            gzip.write(value.getBytes(StandardCharsets.UTF_8));
+        }
+        return output.toByteArray();
     }
 }
