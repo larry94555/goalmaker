@@ -116,6 +116,7 @@ class SpecializedSearchServiceTest {
     private static void configureGeneralSearch(WebSearchToolProvider search, String endpoint) {
         ReflectionTestUtils.setField(search, "searxngUrl", endpoint);
         ReflectionTestUtils.setField(search, "duckDuckGoUrl", "");
+        ReflectionTestUtils.setField(search, "duckDuckGoLiteUrl", "");
         ReflectionTestUtils.setField(search, "maxAttempts", 1);
     }
 

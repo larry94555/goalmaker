@@ -3,21 +3,28 @@ package com.example.goalmaker;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
 
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
-final class DuckDuckGoSearchProvider implements SearchProvider {
+/**
+ * Fallback general-web provider backed by the DuckDuckGo Lite front end. Its markup is a flat table
+ * of {@code a.result-link} rows with matching {@code td.result-snippet} cells, which is far more
+ * stable and less aggressively rate-limited than the rich HTML endpoint, so it keeps the token-free
+ * search path working when SearXNG is absent and the HTML endpoint is blocked or empty.
+ */
+final class DuckDuckGoLiteSearchProvider implements SearchProvider {
     private final String endpoint;
     private final WebHttpClient http;
     private final int maxAttempts;
     private final long retryDelayMillis;
     private final int maxResponseBytes;
 
-    DuckDuckGoSearchProvider(String endpoint, WebHttpClient http, int maxAttempts,
-                             long retryDelayMillis, int maxResponseBytes) {
+    DuckDuckGoLiteSearchProvider(String endpoint, WebHttpClient http, int maxAttempts,
+                                 long retryDelayMillis, int maxResponseBytes) {
         this.endpoint = endpoint;
         this.http = http;
         this.maxAttempts = maxAttempts;
@@ -27,7 +34,7 @@ final class DuckDuckGoSearchProvider implements SearchProvider {
 
     @Override
     public String name() {
-        return "duckduckgo";
+        return "duckduckgo-lite";
     }
 
     @Override
@@ -40,28 +47,24 @@ final class DuckDuckGoSearchProvider implements SearchProvider {
         WebHttpClient.Response response = http.get(URI.create(url.toString()), "text/html",
                 Duration.ofSeconds(20), maxAttempts, retryDelayMillis, maxResponseBytes);
         if (response.status() / 100 != 2) {
-            throw new IllegalStateException("HTTP " + response.status() + " from DuckDuckGo");
+            throw new IllegalStateException("HTTP " + response.status() + " from DuckDuckGo Lite");
         }
-        if (response.truncated()) throw new IllegalStateException("DuckDuckGo response exceeded size limit");
+        if (response.truncated()) throw new IllegalStateException("DuckDuckGo Lite response exceeded size limit");
         if (DuckDuckGo.blocked(response.body())) {
-            throw new IllegalStateException("DuckDuckGo blocked the automated search request");
+            throw new IllegalStateException("DuckDuckGo Lite blocked the automated search request");
         }
 
         Document document = Jsoup.parse(response.body(), url.toString());
+        Elements links = document.select("a.result-link");
+        Elements snippets = document.select("td.result-snippet");
         int limit = DuckDuckGo.candidateLimit(request.maxResults());
         List<SearchResult> results = new ArrayList<>();
-        for (Element result : document.select("div.result")) {
-            Element link = result.selectFirst("a.result__a");
-            if (link == null) continue;
-            Element snippet = result.selectFirst(".result__snippet");
-            Element timestamp = result.selectFirst(".result__timestamp");
-            results.add(new SearchResult(
-                    link.text().trim(),
-                    DuckDuckGo.decodeRedirect(link.attr("href")),
-                    snippet == null ? "" : snippet.text().trim(),
-                    timestamp == null ? "" : timestamp.text().trim(),
-                    name(),
-                    name()));
+        for (int index = 0; index < links.size(); index++) {
+            Element link = links.get(index);
+            String target = DuckDuckGo.decodeRedirect(link.attr("href"));
+            if (target.isBlank()) continue;
+            String snippet = index < snippets.size() ? snippets.get(index).text().trim() : "";
+            results.add(new SearchResult(link.text().trim(), target, snippet, "", name(), name()));
             if (results.size() >= limit) break;
         }
         return List.copyOf(results);

@@ -146,6 +146,39 @@ class WebSearchToolProviderTest {
     }
 
     @Test
+    void fallsBackToDuckDuckGoLiteWhenSearxngFailsAndHtmlIsBlocked() throws Exception {
+        AtomicReference<String> liteQuery = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/searx", exchange -> send(exchange, 503, "text/plain", "unavailable"));
+        server.createContext("/ddg", exchange ->
+                send(exchange, 200, "text/html", "<html><body>captcha challenge</body></html>"));
+        server.createContext("/lite", exchange -> {
+            liteQuery.set(exchange.getRequestURI().getRawQuery());
+            send(exchange, 200, "text/html", liteResults(4));
+        });
+        server.start();
+        try {
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+            WebSearchToolProvider provider = provider(base + "/searx", base + "/ddg");
+            ReflectionTestUtils.setField(provider, "duckDuckGoLiteUrl", base + "/lite");
+            ReflectionTestUtils.setField(provider, "maxAttempts", 1);
+            JsonNode result = payload(catalog(provider).execute("web_search", Map.of(
+                    "query", "open source search", "max_results", 3)));
+
+            assertEquals("duckduckgo-lite", result.path("provider").asText());
+            assertEquals("searxng", result.path("providers_attempted").path(0).asText());
+            assertEquals("duckduckgo", result.path("providers_attempted").path(1).asText());
+            assertEquals("duckduckgo-lite", result.path("providers_attempted").path(2).asText());
+            assertTrue(result.path("provider_notes").toString().contains("blocked the automated search request"));
+            assertEquals(3, result.path("result_count").asInt());
+            assertEquals("https://example.net/lite/1", result.path("results").path(0).path("url").asText());
+            assertTrue(liteQuery.get().contains("q=open+source+search"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void rejectsMissingQuery() {
         WebSearchToolProvider provider = provider("", "");
         String result = catalog(provider).execute("web_search", Map.of());
@@ -179,6 +212,7 @@ class WebSearchToolProviderTest {
                     mapper, null, health, HttpClient.newHttpClient());
             ReflectionTestUtils.setField(provider, "searxngUrl", base + "/searx");
             ReflectionTestUtils.setField(provider, "duckDuckGoUrl", base + "/ddg");
+            ReflectionTestUtils.setField(provider, "duckDuckGoLiteUrl", "");
             ReflectionTestUtils.setField(provider, "maxAttempts", 1);
             ToolCatalog catalog = catalog(provider);
 
@@ -204,6 +238,7 @@ class WebSearchToolProviderTest {
         WebSearchToolProvider provider = new WebSearchToolProvider(mapper);
         ReflectionTestUtils.setField(provider, "searxngUrl", searxng);
         ReflectionTestUtils.setField(provider, "duckDuckGoUrl", duckDuckGo);
+        ReflectionTestUtils.setField(provider, "duckDuckGoLiteUrl", "");
         ReflectionTestUtils.setField(provider, "retryDelayMillis", 0L);
         return provider;
     }
@@ -231,6 +266,17 @@ class WebSearchToolProviderTest {
         int start = wrapped.indexOf('\n') + 1;
         int end = wrapped.lastIndexOf("\n[END UNTRUSTED CONTENT]");
         return mapper.readTree(wrapped.substring(start, end));
+    }
+
+    private static String liteResults(int count) {
+        StringBuilder html = new StringBuilder("<html><body><table>");
+        for (int i = 1; i <= count; i++) {
+            String destination = "https%3A%2F%2Fexample.net%2Flite%2F" + i;
+            html.append("<tr><td><a class='result-link' href='//duckduckgo.com/l/?uddg=")
+                    .append(destination).append("&amp;rut=v'>Lite result ").append(i).append("</a></td></tr>")
+                    .append("<tr><td class='result-snippet'>Lite snippet ").append(i).append("</td></tr>");
+        }
+        return html.append("</table></body></html>").toString();
     }
 
     private static String searchResults(int count) {

@@ -114,6 +114,19 @@ This consolidates the previously duplicated tokenizer and stop-word handling int
 Tests cover BM25 tokenization and stop-word filtering, relevant-over-irrelevant scoring, inverse-document-frequency
 weighting, term coverage, and end-to-end re-ranking that promotes a more relevant lower-ranked search result.
 
+### Resilient token-free fallback chain
+
+General web search no longer collapses to a single brittle scraper when SearXNG is absent, which is the default
+for a quick token-free setup. The provider chain is now SearXNG, then the DuckDuckGo HTML endpoint, then the more
+tolerant DuckDuckGo Lite front end, each tried only when the preceding provider is unavailable, blocked, or
+returns no results. DuckDuckGo Lite uses a stable, flat result table and is far less aggressively rate-limited, so
+a captcha or block on the HTML endpoint no longer ends the search. The shared query-parameter building, redirect
+unwrapping, block detection, and candidate-pool sizing for both DuckDuckGo front ends are consolidated in one
+`DuckDuckGo` helper. Each fallback endpoint can be disabled by blanking its URL.
+
+Tests cover the full chain falling through a failed SearXNG and a blocked HTML endpoint to Lite, Lite result
+parsing and redirect unwrapping, and preserved provider diagnostics.
+
 ## Next Recommended Change
 
 ### 1. Search quality evaluation and regression gates
