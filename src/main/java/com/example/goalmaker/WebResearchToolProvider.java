@@ -125,6 +125,12 @@ public class WebResearchToolProvider {
         payload.put("query", request.query());
         payload.put("generated_at", Instant.now().toString());
         payload.put("search_provider", searchPayload.getOrDefault("provider", "none"));
+        payload.put("query_intents", searchPayload.getOrDefault("query_intents", List.of("general")));
+        payload.put("search_providers_attempted",
+                searchPayload.getOrDefault("providers_attempted", List.of()));
+        if (searchPayload.containsKey("specialized_providers_cached")) {
+            payload.put("specialized_providers_cached", searchPayload.get("specialized_providers_cached"));
+        }
         payload.put("search_cached", searchPayload.getOrDefault("cached", false));
         payload.put("search_result_count", searchPayload.getOrDefault("result_count", 0));
         if (searchPayload.containsKey("provider_notes")) {

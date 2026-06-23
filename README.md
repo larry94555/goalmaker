@@ -44,6 +44,13 @@ The built-in `web_research`, `web_search`, and `web_fetch` tools require no API 
 forces `web_research` as the first model tool call. It deterministically searches, selects source-diverse
 candidates, fetches pages concurrently, and returns a compact evidence bundle before the model writes an answer.
 
+Search queries are classified deterministically into one or more intents. General web search always remains
+available, while current-news queries also use GDELT, factual-entity queries use MediaWiki and Wikidata,
+scholarly queries use arXiv, and archival URL lookups use the latest Common Crawl index. Results are normalized,
+deduplicated, and blended round-robin with SearXNG or DuckDuckGo so one provider cannot occupy every result slot.
+Each result retains its provider and engine provenance. A specialized provider failure is reported in
+`provider_notes` and does not prevent the remaining providers from returning results.
+
 `web_research` accepts `query`, `max_sources`, `min_sources`, `language`, `time_range`, `safe_search`, and
 SearXNG `categories`. It prefers one source per registrable domain, ranks candidates using search position and
 bounded source signals, extracts the most query-relevant sentences, and returns citation-ready evidence with
@@ -55,11 +62,17 @@ the model is required to compare them and disclose material conflicts. When the 
 must say so and may use `web_search` and `web_fetch` for additional investigation.
 
 `web_search` prefers the structured JSON API of a local SearXNG instance and falls back to DuckDuckGo HTML when
-SearXNG is unavailable or returns no results. It supports `query`, `max_results`, `language`, `time_range`,
-`page`, `safe_search`, and SearXNG `categories`. Results are deduplicated and returned as JSON with rank,
-provider, engine, title, URL, snippet, optional publication date, retrieval time, and provider diagnostics.
-Transient failures are retried with bounded backoff, oversized responses are rejected, and successful searches
-are cached for five minutes by default.
+SearXNG is unavailable or returns no results. Query-aware providers are then blended when the classifier selects
+them. The tool supports `query`, `max_results`, `language`, `time_range`, `page`, `safe_search`, and SearXNG
+`categories`. Results are returned as JSON with detected `query_intents`, rank, provider, engine, title, URL,
+snippet, optional publication date, retrieval time, cache status, and provider diagnostics. Transient failures
+are retried with bounded backoff, oversized responses are rejected, and successful searches are cached.
+
+Specialized providers have independent cache durations, minimum call intervals, retry overrides, response-size
+limits, and endpoint settings under `web.specialized.*` in `application.properties`. Set a provider URL to blank
+to disable it. Common Crawl currently supplies capture metadata from its latest published index; it does not
+download archived WARC content. Public token-free services may throttle or temporarily reject traffic, so the
+general search path remains the bounded fallback.
 
 Start the included local SearXNG service with Docker:
 
@@ -86,8 +99,11 @@ thresholds, candidate count, and research concurrency are configurable in `appli
 With local SearXNG running, execute the optional live integration check with:
 
 ```bat
-.\mvnw.cmd -B -ntp -Dgoalmaker.live-web-test=true -Dtest=WebResearchLiveTest test
+.\mvnw.cmd -B -ntp "-Dgoalmaker.live-web-test=true" test
 ```
+
+This checks the SearXNG research path plus live MediaWiki/Wikidata, arXiv, and Common Crawl routing. GDELT parsing
+and fallback behavior are tested with deterministic fixtures because its public endpoint may rate-limit CI runs.
 
 ### Create A Skill
 
