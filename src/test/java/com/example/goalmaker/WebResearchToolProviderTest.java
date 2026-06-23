@@ -114,6 +114,8 @@ class WebResearchToolProviderTest {
         fetched.put("page_count", 12);
         fetched.put("pages_extracted", 12);
         fetched.put("metadata_conflicts", List.of(Map.of("field", "title")));
+        fetched.put("fetch_policy", Map.of("dns_pinned", true, "allowed_ports", List.of(80, 443)));
+        fetched.put("fetch_isolation", Map.of("mode", "worker-process", "enabled", true));
         fetched.put("retrieved_at", "2026-06-22T00:00:00Z");
         fetched.put("truncated", false);
         fetched.put("content", "The document contains evidence relevant to the research question.");
@@ -131,6 +133,8 @@ class WebResearchToolProviderTest {
         assertEquals("pdfbox", evidence.path("extraction_method").asText());
         assertEquals(12, evidence.path("page_count").asInt());
         assertEquals(1, evidence.path("metadata_conflicts").size());
+        assertTrue(evidence.path("fetch_policy").path("dns_pinned").asBoolean());
+        assertEquals("worker-process", evidence.path("fetch_isolation").path("mode").asText());
     }
 
     private ToolCatalog catalog(WebSearchToolProvider search, WebFetchToolProvider fetch,

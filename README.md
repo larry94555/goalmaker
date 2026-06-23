@@ -126,11 +126,43 @@ local, private, link-local, or multicast addresses. Each redirect and robots tar
 fetched. Keep `web.fetch.allow-private-addresses=false` unless a trusted local integration explicitly requires
 otherwise. Fetch and robots limits are configured under `web.fetch.*` in `application.properties`.
 
+Fetching and document parsing run in a persistent pool of dedicated JVM worker processes by default. A worker
+has a bounded heap, metaspace and code cache, one advertised processor, a hard parent-enforced wall-clock limit,
+and a bounded response protocol. A crash, timeout, malformed protocol response, or oversized output causes that
+worker to be terminated; the next fetch starts a clean replacement. Healthy workers are reused so concurrent
+research remains practical and robots rules stay cached.
+
+Each fetch resolves a hostname once through a request-local DNS map. The same validated addresses are returned
+to OkHttp for every connection attempt during that fetch, preventing a second DNS answer from redirecting the
+connection to a private address. Worker HTTP connections bypass system proxies so the pinned destination cannot
+be resolved by an intermediary instead. By default only destination ports 80 and 443 are permitted. One total time
+budget and one HTTP-request count cover robots checks, retries, redirects, downloads, and parsing together.
+Decompressed response bytes are bounded before extraction. Fetch results expose these controls in `fetch_policy`
+and `fetch_isolation`, and `web_research` preserves both objects in its evidence provenance.
+
+The worker settings are:
+
+```properties
+web.fetch.allowed-ports=80,443
+web.fetch.total-budget-seconds=40
+web.fetch.max-http-requests=12
+web.fetch.worker.enabled=true
+web.fetch.worker.pool-size=4
+web.fetch.worker.memory-mb=192
+web.fetch.worker.active-processors=1
+web.fetch.worker.timeout-seconds=45
+web.fetch.worker.max-output-bytes=1048576
+```
+
+Set `web.fetch.worker.enabled=false` only for trusted debugging; it moves parsing back into the Spring Boot
+process. The portable worker boundary limits managed JVM resources but is not an operating-system network or
+total-RSS sandbox. Container-enforced CPU, memory, process, filesystem, and egress policy remains a roadmap item.
+
 All research, search, and fetched content is fenced as untrusted external data before reaching the model. Common
 prompt-injection phrases receive an additional warning, but the untrusted boundary applies to every result.
-Timeouts, retry limits, cache behavior, provider URLs, response sizes, redirects, fetch text limits, health
-intervals, circuit breaking, optional Compose startup, source thresholds, candidate count, and research
-concurrency are configurable in `application.properties`.
+Timeouts, retry limits, cache behavior, provider URLs, response sizes, redirects, fetch text limits, worker
+resources, allowed ports, total fetch budgets, health intervals, circuit breaking, optional Compose startup,
+source thresholds, candidate count, and research concurrency are configurable in `application.properties`.
 
 With local SearXNG running, execute the optional live integration check with:
 

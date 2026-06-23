@@ -50,26 +50,43 @@ author, dates, page counts, and metadata conflicts. Deterministic tests cover re
 text, metadata conflicts, robots exclusions and caching, valid and malformed PDFs, byte and page limits,
 redirects, private targets, and provenance propagation.
 
+### Process-isolated fetch workers
+
+Web fetching and HTML/PDF parsing now run outside Spring Boot in a bounded pool of dedicated JVM workers.
+Workers have configured heap, metaspace, code-cache, processor, wall-clock, and output limits. A crash, timeout,
+or protocol violation discards the worker, and the pool creates a clean replacement without taking down the
+application. Healthy workers are reused to preserve concurrency and robots caches.
+
+Each fetch uses a request-local pinned DNS resolver that validates public addresses once and supplies those same
+addresses to a direct, no-proxy HTTP connection. Destination ports are allowlisted, decompressed bytes are bounded, and
+one time and HTTP-request budget covers robots checks, retries, redirects, downloads, and parsing. Fetch and
+research provenance report the active network policy and process-isolation limits.
+
+Tests cover DNS rebinding simulation, private addresses, unapproved ports, redirects, shared request exhaustion,
+slow streams, compressed expansion, parser-process crashes, wall-clock termination, oversized worker output,
+worker reuse, and automatic recovery.
+
 ## Next Recommended Change
 
-### 1. Stronger fetch isolation
+### 1. Container-enforced worker sandbox
 
-Move web fetching and document parsing into a restricted process or container with network egress controls. Pin
-DNS resolution through the connection to close rebinding gaps, restrict destination ports, and apply a total
-request budget across robots checks, redirects, downloads, and parsing.
+Add an optional Docker worker mode with hard total-RSS, CPU, PID, filesystem, capability, and network-egress
+controls while retaining the portable JVM worker as the no-Docker fallback. Restrict container egress to DNS and
+public TCP ports 80/443 and expose worker health and restart counters.
 
-This is now the highest-value remaining improvement because GoalMaker processes arbitrary public documents. The
-current in-process checks substantially reduce risk, but process isolation provides a stronger boundary against
-malformed documents, parser vulnerabilities, DNS rebinding, and resource exhaustion without requiring a paid
-service or API token.
+This is the highest-value remaining security improvement because JVM heap and wall-clock controls do not cap all
+native memory or provide an operating-system network boundary. The current process worker contains parser crashes
+and pins validated DNS results, but a container can enforce the policy even if a parser or dependency is
+compromised.
 
 Completion criteria:
 
-- run fetch and parsing work outside the Spring Boot process with strict CPU, memory, wall-clock, and output limits
-- permit only public HTTP(S) egress on approved ports and bind the validated DNS result to the connection
-- enforce one total budget across robots checks and all redirects instead of independent per-request budgets
-- preserve the current structured fetch result and error contract
-- test DNS rebinding, redirect loops, slow streams, decompression bombs, parser crashes, and worker recovery
+- provide explicit `process` and `docker` worker modes with process mode as a portable fallback
+- run the Docker worker read-only with dropped capabilities, no new privileges, bounded RSS/CPU/PIDs, and tmpfs
+- enforce DNS plus public HTTP(S)-only egress independently of application-level checks
+- report worker mode, health, restarts, and resource-limit terminations
+- preserve the current worker protocol and structured fetch result contract
+- test container startup, policy enforcement, crash recovery, and fallback behavior
 
 ## Later Priorities
 

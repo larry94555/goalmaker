@@ -113,8 +113,9 @@ evidence. Missing metadata should be reported as unavailable, not invented.
 ask.bat "Fetch and inspect the exact PDF https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf . State its extracted text and report content type, extraction method, title, author, page count, pages extracted, and any truncation reason."
 ```
 
-Expected: the answer includes `Dummy PDF file`, `application/pdf`, `pdfbox`, and page provenance. Title or author
-may be absent because the source PDF may not provide them.
+Expected: the answer includes `Dummy PDF file`, `application/pdf`, `pdfbox`, and page provenance. Ask the model
+to report `fetch_isolation.mode=worker-process`, `fetch_policy.dns_pinned=true`, allowed ports, and total budgets.
+Title or author may be absent because the source PDF may not provide them.
 
 For a substantive PDF, use:
 
@@ -208,6 +209,66 @@ To test optional managed startup, stop SearXNG, set `web.search.searxng-manage=t
 the health endpoint. Expected: Spring Boot starts without waiting for search, health moves from `starting` to
 `healthy` or `degraded`, and Compose output is written to `searxng-compose.log`.
 
+## Fetch Isolation Tests
+
+### Worker process and policy provenance
+
+```bat
+ask.bat "Fetch https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf and report the fetch_isolation and fetch_policy objects exactly, followed by the extracted text."
+```
+
+Expected: `fetch_isolation.mode` is `worker-process`; enabled is true; heap, processor, wall-clock, output, and
+pool limits are present. `fetch_policy.dns_pinned` is true, allowed ports are 80 and 443, and total time and HTTP
+request budgets are present.
+
+While GoalMaker is running, worker JVMs can be observed with PowerShell:
+
+```powershell
+Get-CimInstance Win32_Process | Where-Object CommandLine -Match 'FetchWorkerMain' | Select-Object ProcessId, CommandLine
+```
+
+Workers are started lazily. Run a fetch prompt first. Healthy workers remain available for reuse and are stopped
+when GoalMaker exits.
+
+### Unapproved destination port
+
+```bat
+ask.bat "Fetch the exact URL https://example.com:8443/ and do not substitute another URL."
+```
+
+Expected: the fetch is rejected with `url port 8443 is not allowed` before a connection is attempted.
+
+### Private address through DNS
+
+```bat
+ask.bat "Fetch the exact URL http://localhost/ and do not use another source."
+```
+
+Expected: the fetch is rejected because the hostname resolves to a private or local address. The deterministic
+suite also simulates a DNS answer changing from public to private and verifies that only the first validated
+address set is ever supplied to the connection layer.
+
+### Worker failure and recovery
+
+Crash, hang, oversized output, and recovery paths use a deterministic fake worker rather than an external web
+page. Run:
+
+```bat
+.\mvnw.cmd -B -ntp "-Dtest=FetchWorkerClientTest" test
+```
+
+Expected: one healthy worker is reused; a crash, wall-clock timeout, and oversized output each discard that
+worker; a clean replacement successfully handles the request immediately following every failure.
+
+### Network and parsing budgets
+
+```bat
+.\mvnw.cmd -B -ntp "-Dtest=WebFetchToolProviderTest,PinnedDnsTest,FetchBudgetTest" test
+```
+
+Expected: tests pass for shared robots/redirect request exhaustion, slow streaming termination, decompressed-size
+limits, redirect loops, private targets, unapproved ports, pinned DNS, PDF limits, and isolated-worker execution.
+
 ## Automated Tests
 
 Run the complete deterministic suite. It makes no public-network calls:
@@ -219,7 +280,7 @@ Run the complete deterministic suite. It makes no public-network calls:
 Run only fetch and research tests while iterating:
 
 ```bat
-.\mvnw.cmd -B -ntp "-Dtest=WebFetchToolProviderTest,WebResearchToolProviderTest" test
+.\mvnw.cmd -B -ntp "-Dtest=WebFetchToolProviderTest,WebResearchToolProviderTest,FetchWorkerClientTest,PinnedDnsTest,FetchBudgetTest" test
 ```
 
 Run the opt-in public integration suite with local SearXNG available:
@@ -257,12 +318,19 @@ This checklist was reviewed against the current web-search implementation and ro
 | Redirect validation and redirect limit | Prompt 8 source dependent | `WebFetchToolProviderTest` |
 | Private/local target blocking | Prompt 12 | `WebFetchToolProviderTest` |
 | Byte, page, character, and parsing-time budgets | Prompt 9 | `WebFetchToolProviderTest`; timeout is enforced in implementation |
+| Isolated worker process and process-limit provenance | Fetch isolation prompt | `WebFetchToolProviderTest`, `FetchWorkerClientTest` |
+| Worker reuse, crash, timeout, output overflow, and recovery | Worker failure command | `FetchWorkerClientTest` |
+| DNS pinning and rebinding resistance | Private-address prompt | `PinnedDnsTest` |
+| Public destination-port allowlist | Unapproved-port prompt | `PinnedDnsTest` |
+| One total time and HTTP-request budget | Network budget command | `FetchBudgetTest`, `WebFetchToolProviderTest` |
+| Slow streams and decompressed-size expansion | Network budget command | `WebFetchToolProviderTest` |
 | Untrusted-content fencing and injection warning | All prompts | `WebFetchToolProviderTest`, `WebSearchToolProviderTest` |
 | Health states, metrics, circuit breaker, recovery | Outage test | `SearxngHealthManagerTest`, `WebSearchHealthControllerTest` |
 | Optional managed Compose startup | Managed-startup operation | `SearxngHealthManagerTest`, `WebSearchConfigurationTest` |
 | Live SearXNG and public-provider compatibility | Live command | `WebResearchLiveTest`, `SpecializedSearchLiveTest`, `SearxngHealthLiveTest` |
 
-The prompt suite covers every user-visible web-search capability. Network-sensitive cases also have deterministic
-fixtures, except the PDF timeout itself: production code enforces it with a cancellable bounded future, while the
-suite avoids a deliberately CPU-consuming PDF fixture. Stronger process-level resource enforcement remains the
-next roadmap item.
+The prompt suite covers every user-visible web-search capability. Network-sensitive and isolation cases have
+deterministic fixtures, except the PDF timeout itself: production code enforces it with a cancellable bounded
+future and a parent-enforced worker deadline, while the suite avoids a deliberately CPU-consuming PDF fixture.
+The remaining isolation gap is operating-system enforcement of total RSS, CPU, PIDs, filesystem access, and
+network egress; optional container worker mode is the next roadmap item.
