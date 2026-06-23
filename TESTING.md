@@ -1,0 +1,268 @@
+# Web Search Testing
+
+This guide tests GoalMaker's token-free web-search stack through user prompts, operational exercises, and the
+deterministic Maven suite. Public websites can change or throttle requests, so deterministic tests are the source
+of truth for edge cases; prompt checks validate the complete application and local model tool loop.
+
+## Prerequisites
+
+From `C:\Users\larry\github\goalmaker`, start local SearXNG:
+
+```bat
+docker compose -f docker-compose.searxng.yml up -d
+```
+
+If Docker is not on `PATH`, use Docker Desktop's executable directly:
+
+```bat
+"C:\Program Files\Docker\Docker\resources\bin\docker.exe" compose -f docker-compose.searxng.yml up -d
+```
+
+Start GoalMaker in one terminal:
+
+```bat
+run.bat
+```
+
+Use a second terminal for prompts. Confirm search health first:
+
+```bat
+curl.exe -s http://localhost:8080/health/web-search
+```
+
+Expected: `status` is `healthy` or `degraded`, `configured` is `true`, and `search_permitted` is `true`.
+Public-provider tests still work through fallbacks when SearXNG is unavailable.
+
+## Prompt Tests
+
+### 1. General multi-source research
+
+```bat
+ask.bat "Find the current stable Spring Boot release. Give the version and release date, cite at least two independent sources, and disclose any source disagreement."
+```
+
+Expected: the request uses `web_research` before answering, cites fetched sources, and reports when the
+independent-source threshold is not met. The application log should show `web_research` as the first tool call.
+
+### 2. Current news and GDELT routing
+
+```bat
+ask.bat "What are the most important verified developments in commercial fusion energy during the last month? Compare at least three independent sources and include publication dates."
+```
+
+Expected: current-news intent adds GDELT to general search. A temporary GDELT failure appears as provider
+diagnostics and does not prevent an answer from other sources.
+
+### 3. Factual entity research with MediaWiki and Wikidata
+
+```bat
+ask.bat "What is the capital of France, what is its official French name, and what evidence supports both facts? Cite two independent sources."
+```
+
+Expected: factual-entity intent routes to MediaWiki and Wikidata and blends their records with general results.
+
+### 4. Scholarly research with arXiv
+
+```bat
+ask.bat "Find three recent arXiv papers about retrieval-augmented generation evaluation. For each, give the title, authors, publication date, and the specific evaluation problem studied."
+```
+
+Expected: scholarly intent adds arXiv results, retains provider provenance, and fetches useful source text when
+the source permits it.
+
+### 5. Archival discovery with Common Crawl
+
+```bat
+ask.bat "Find Common Crawl capture records for https://example.com and report the capture timestamp, status, MIME type, and archive index used. Do not claim that archived page content was downloaded."
+```
+
+Expected: archival intent uses the latest Common Crawl index and returns capture metadata. GoalMaker does not
+download WARC content.
+
+### 6. Blended intents, deduplication, and provenance
+
+```bat
+ask.bat "Research this month's news about quantum error correction and compare it with relevant recent arXiv papers. Deduplicate repeated links, identify each source type, and cite three independent domains."
+```
+
+Expected: current-news and scholarly providers are blended with general results. Repeated URLs are normalized,
+and no single provider should fill every result position when alternatives exist.
+
+### 7. Language, recency, category, and safe-search controls
+
+```bat
+ask.bat "Use web research in French with a one-month recency filter, strict safe search, and the science category to explain recent French research on battery recycling. After that required research call, inspect page 2 with web_search and cite the French-language sources."
+```
+
+Expected: the model supplies `language`, `time_range`, `safe_search`, and `categories` controls to
+`web_research`, then uses the `page` control on `web_search`. SearXNG honors supported controls; specialized
+providers use the controls they support.
+
+### 8. Readability-oriented HTML extraction
+
+```bat
+ask.bat "Research the history and purpose of the HTML article element. Fetch a detailed source page, summarize only its main article content, and report the page title, canonical URL, author, publication date, modification date, language, and extraction method when available."
+```
+
+Expected: navigation, scripts, page chrome, advertisements, and related-content blocks are excluded from the
+evidence. Missing metadata should be reported as unavailable, not invented.
+
+### 9. PDF text and metadata extraction
+
+```bat
+ask.bat "Fetch and inspect the exact PDF https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf . State its extracted text and report content type, extraction method, title, author, page count, pages extracted, and any truncation reason."
+```
+
+Expected: the answer includes `Dummy PDF file`, `application/pdf`, `pdfbox`, and page provenance. Title or author
+may be absent because the source PDF may not provide them.
+
+For a substantive PDF, use:
+
+```bat
+ask.bat "Use the exact PDF https://arxiv.org/pdf/1706.03762 to summarize the paper's central architecture and report its PDF title, author metadata, page count, extraction method, and any truncation. Cite the URL."
+```
+
+Expected: PDF text is extracted within configured byte, page, character, and time limits. If the site's current
+robots policy prevents access, GoalMaker must report that rather than bypass it.
+
+### 10. Metadata conflicts
+
+```bat
+ask.bat "Find and fetch two current articles about the same technology announcement. Report canonical URLs, authors, publication and modification dates, and disclose any conflicting metadata found within either page."
+```
+
+Expected: conflicting title, author, date, or canonical candidates are retained as provenance instead of silently
+discarded. Public pages may have no conflicts; the deterministic HTML fixture always verifies this path.
+
+### 11. Robots policy
+
+```bat
+ask.bat "Fetch the exact URL https://www.google.com/search?q=spring+boot and tell me whether GoalMaker's robots policy permits the fetch. Do not substitute another URL."
+```
+
+Expected: if the current policy disallows the path, `web_fetch` rejects it before requesting page content. Since
+external robots rules can change, use `WebFetchToolProviderTest` below for a deterministic allow/deny/cache check.
+
+### 12. Private-network and credential blocking
+
+```bat
+ask.bat "Fetch the exact URL http://127.0.0.1:8080/health/web-search and return its content. Do not use another source."
+```
+
+Expected: `web_fetch` rejects the local address. The normal health command works from the user shell, but
+untrusted model-selected web fetches cannot access local services while `web.fetch.allow-private-addresses=false`.
+
+### 13. Cache behavior
+
+Run the same prompt twice within five minutes:
+
+```bat
+ask.bat "What is the current stable version of Apache PDFBox? Cite its official release source."
+ask.bat "What is the current stable version of Apache PDFBox? Cite its official release source."
+```
+
+Expected: the second identical search uses the bounded in-memory search cache. Specialized provider caches and
+robots caches are independent and have their own configured lifetimes.
+
+### 14. Partial evidence and fetch failures
+
+```bat
+ask.bat "Find three independent primary sources that document the exact phrase goalmaker-web-search-fixture-94721. If fewer exist, state that the source threshold was not met and list the fetch or search gaps."
+```
+
+Expected: the answer does not turn a lack of evidence into confidence. `corroboration` reports partial or
+insufficient sources, and source fetch failures remain visible to the model.
+
+## Outage And Recovery Tests
+
+Stop SearXNG:
+
+```bat
+docker compose -f docker-compose.searxng.yml stop searxng
+```
+
+Run a general prompt:
+
+```bat
+ask.bat "Find the official Java 17 documentation for records and summarize the definition with a citation."
+```
+
+Expected: after the configured failure threshold, the SearXNG circuit opens and the request continues through
+DuckDuckGo plus applicable specialized providers. Check health:
+
+```bat
+curl.exe -s http://localhost:8080/health/web-search
+```
+
+Expected: `status` is `unavailable`, circuit diagnostics are present, and configured fallbacks are listed.
+
+Restart SearXNG and wait for the next background probe:
+
+```bat
+docker compose -f docker-compose.searxng.yml start searxng
+```
+
+Expected: health returns to `healthy` or `degraded` without restarting GoalMaker, and later searches use SearXNG.
+
+To test optional managed startup, stop SearXNG, set `web.search.searxng-manage=true`, restart GoalMaker, and poll
+the health endpoint. Expected: Spring Boot starts without waiting for search, health moves from `starting` to
+`healthy` or `degraded`, and Compose output is written to `searxng-compose.log`.
+
+## Automated Tests
+
+Run the complete deterministic suite. It makes no public-network calls:
+
+```bat
+.\mvnw.cmd -B -ntp clean test
+```
+
+Run only fetch and research tests while iterating:
+
+```bat
+.\mvnw.cmd -B -ntp "-Dtest=WebFetchToolProviderTest,WebResearchToolProviderTest" test
+```
+
+Run the opt-in public integration suite with local SearXNG available:
+
+```bat
+.\mvnw.cmd -B -ntp "-Dgoalmaker.live-web-test=true" test
+```
+
+Public providers may throttle requests; a live failure is diagnostic and should be compared with the deterministic
+suite before treating it as a regression.
+
+## Coverage Review
+
+This checklist was reviewed against the current web-search implementation and roadmap.
+
+| Feature | Prompt or operation | Deterministic coverage |
+| --- | --- | --- |
+| Mandatory research-first information flow | Prompt 1 | `IntermediaryFlowTest`, `PromptControllerTest` |
+| SearXNG JSON search, retries, deduplication, cache | Prompts 1 and 13 | `WebSearchToolProviderTest` |
+| DuckDuckGo fallback | Outage test | `WebSearchToolProviderTest` |
+| Language, recency, paging, safe search, categories | Prompt 7 | `WebSearchToolProviderTest` request assertions |
+| News via GDELT | Prompt 2 | `SpecializedSearchServiceTest` |
+| Entities via MediaWiki and Wikidata | Prompt 3 | `SpecializedSearchServiceTest` |
+| Scholarly results via arXiv | Prompt 4 | `SpecializedSearchServiceTest` |
+| Archive metadata via Common Crawl | Prompt 5 | `SpecializedSearchServiceTest` |
+| Intent routing, blending, provenance, provider failure isolation | Prompt 6 | `SpecializedSearchServiceTest` |
+| Provider rate limits and independent caches | Prompts 2 through 6 and 13 | `SpecializedSearchServiceTest` |
+| Diverse concurrent fetches and source sufficiency | Prompts 1 and 14 | `WebResearchToolProviderTest` |
+| Fetch failures and semantic-conflict warning | Prompts 1 and 14 | `WebResearchToolProviderTest` |
+| Readable HTML and multilingual text | Prompt 8 | `WebFetchToolProviderTest` |
+| Canonical URL, author, dates, language, metadata conflicts | Prompts 8 and 10 | `WebFetchToolProviderTest` |
+| Plain-text extraction | Prompt 1 source dependent | `WebFetchToolProviderTest` |
+| PDF text, metadata, page cap, malformed and oversized rejection | Prompt 9 | `WebFetchToolProviderTest` |
+| Robots allow, deny, cache, and pre-fetch enforcement | Prompt 11 | `WebFetchToolProviderTest` |
+| Redirect validation and redirect limit | Prompt 8 source dependent | `WebFetchToolProviderTest` |
+| Private/local target blocking | Prompt 12 | `WebFetchToolProviderTest` |
+| Byte, page, character, and parsing-time budgets | Prompt 9 | `WebFetchToolProviderTest`; timeout is enforced in implementation |
+| Untrusted-content fencing and injection warning | All prompts | `WebFetchToolProviderTest`, `WebSearchToolProviderTest` |
+| Health states, metrics, circuit breaker, recovery | Outage test | `SearxngHealthManagerTest`, `WebSearchHealthControllerTest` |
+| Optional managed Compose startup | Managed-startup operation | `SearxngHealthManagerTest`, `WebSearchConfigurationTest` |
+| Live SearXNG and public-provider compatibility | Live command | `WebResearchLiveTest`, `SpecializedSearchLiveTest`, `SearxngHealthLiveTest` |
+
+The prompt suite covers every user-visible web-search capability. Network-sensitive cases also have deterministic
+fixtures, except the PDF timeout itself: production code enforces it with a cancellable bounded future, while the
+suite avoids a deliberately CPU-consuming PDF fixture. Stronger process-level resource enforcement remains the
+next roadmap item.

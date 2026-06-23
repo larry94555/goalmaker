@@ -96,6 +96,43 @@ class WebResearchToolProviderTest {
         assertEquals("ERROR: min_sources must not exceed max_sources", result);
     }
 
+    @Test
+    void preservesFetchedDocumentProvenanceInEvidence() throws Exception {
+        String url = "https://papers.example.org/document.pdf";
+        FakeSearch search = new FakeSearch(mapper, searchPayload(List.of(
+                result(1, "Search title", url, "2025-01-01"))));
+        FakeFetch fetch = new FakeFetch(mapper);
+        Map<String, Object> fetched = new LinkedHashMap<>();
+        fetched.put("url", url);
+        fetched.put("canonical_url", "https://papers.example.org/canonical.pdf");
+        fetched.put("title", "Document title");
+        fetched.put("author", "PDF Author");
+        fetched.put("published_at", "2026-06-20T10:15:30Z");
+        fetched.put("modified_at", "2026-06-21T00:00:00Z");
+        fetched.put("content_type", "application/pdf");
+        fetched.put("extraction_method", "pdfbox");
+        fetched.put("page_count", 12);
+        fetched.put("pages_extracted", 12);
+        fetched.put("metadata_conflicts", List.of(Map.of("field", "title")));
+        fetched.put("retrieved_at", "2026-06-22T00:00:00Z");
+        fetched.put("truncated", false);
+        fetched.put("content", "The document contains evidence relevant to the research question.");
+        fetch.add(url, fetched);
+        WebResearchToolProvider research = new WebResearchToolProvider(mapper, search, fetch);
+
+        JsonNode payload = payload(catalog(search, fetch, research).execute("web_research", Map.of(
+                "query", "What evidence is in the document?", "max_sources", 1, "min_sources", 1)));
+        JsonNode evidence = payload.path("evidence").path(0);
+
+        assertEquals("https://papers.example.org/canonical.pdf", evidence.path("canonical_url").asText());
+        assertEquals("PDF Author", evidence.path("author").asText());
+        assertEquals("2026-06-20T10:15:30Z", evidence.path("published_at").asText());
+        assertEquals("application/pdf", evidence.path("content_type").asText());
+        assertEquals("pdfbox", evidence.path("extraction_method").asText());
+        assertEquals(12, evidence.path("page_count").asInt());
+        assertEquals(1, evidence.path("metadata_conflicts").size());
+    }
+
     private ToolCatalog catalog(WebSearchToolProvider search, WebFetchToolProvider fetch,
                                 WebResearchToolProvider research) {
         ToolCatalog catalog = new ToolCatalog(
@@ -164,6 +201,10 @@ class WebResearchToolProviderTest {
                     "retrieved_at", "2026-06-22T00:00:00Z",
                     "truncated", false,
                     "content", content));
+        }
+
+        void add(String url, Map<String, Object> payload) {
+            payloads.put(url, Map.copyOf(payload));
         }
 
         void fail(String url, String message) {

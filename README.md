@@ -110,11 +110,21 @@ Its JSON API is bound to `127.0.0.1:8888`; it is not exposed to the network. Rep
 through DuckDuckGo automatically. See the [SearXNG Search API](https://docs.searxng.org/dev/search_api.html)
 for supported query controls.
 
-`web_fetch` follows at most five redirects, accepts public HTTP(S) pages, limits downloads and returned text,
-and extracts readable article/main content from HTML. It rejects credentials, unsupported content types, and
-URLs resolving to local, private, link-local, or multicast addresses. Each redirect target is validated before
-it is fetched. Keep `web.fetch.allow-private-addresses=false` unless a trusted local integration explicitly
-requires otherwise.
+`web_fetch` follows at most five redirects and accepts public HTTP(S) HTML, text, and PDF documents. A
+readability-oriented HTML extractor removes common page noise and prefers semantic article content. It records
+available canonical URL, title, author, publication date, modification date, language, content type, extraction
+method, and conflicting metadata candidates. PDFBox extracts text and document metadata without executing
+embedded active content; PDF downloads, parsing time, pages, and returned characters are independently bounded.
+
+Before fetching a document or redirect target, GoalMaker applies that origin's `robots.txt` rules for the
+`goalmaker` user agent using RFC 9309 parsing. Rules are cached for one hour by default. Explicit exclusions are
+rejected before document content is requested, and temporary robots failures fail closed. Fetch results report
+the robots decision, downloaded byte count, extraction method, page counts, and precise truncation reasons.
+
+The fetcher rejects credentials, unsupported content types, malformed or encrypted PDFs, and URLs resolving to
+local, private, link-local, or multicast addresses. Each redirect and robots target is validated before it is
+fetched. Keep `web.fetch.allow-private-addresses=false` unless a trusted local integration explicitly requires
+otherwise. Fetch and robots limits are configured under `web.fetch.*` in `application.properties`.
 
 All research, search, and fetched content is fenced as untrusted external data before reaching the model. Common
 prompt-injection phrases receive an additional warning, but the untrusted boundary applies to every result.
@@ -131,6 +141,9 @@ With local SearXNG running, execute the optional live integration check with:
 This checks SearXNG health/readiness and research plus live MediaWiki/Wikidata, arXiv, and Common Crawl routing.
 GDELT parsing and fallback behavior are tested with deterministic fixtures because its public endpoint may
 rate-limit CI runs.
+
+See [TESTING.md](TESTING.md) for prompt-based checks, outage and recovery exercises, focused deterministic
+tests, and a coverage matrix for every web-search feature.
 
 ### Create A Skill
 

@@ -203,11 +203,21 @@ public class WebResearchToolProvider {
             item.put("title", string(fetched.get("title")).isBlank()
                     ? candidate.title() : string(fetched.get("title")));
             item.put("url", string(fetched.getOrDefault("url", candidate.url())));
+            putIfPresent(item, "canonical_url", fetched.get("canonical_url"));
             item.put("domain", candidate.domain());
             item.put("search_rank", candidate.rank());
             item.put("search_provider", candidate.provider());
             if (!candidate.engine().isBlank()) item.put("search_engine", candidate.engine());
-            if (!candidate.publishedAt().isBlank()) item.put("published_at", candidate.publishedAt());
+            String publishedAt = string(fetched.get("published_at"));
+            if (publishedAt.isBlank()) publishedAt = candidate.publishedAt();
+            if (!publishedAt.isBlank()) item.put("published_at", publishedAt);
+            putIfPresent(item, "modified_at", fetched.get("modified_at"));
+            putIfPresent(item, "author", fetched.get("author"));
+            putIfPresent(item, "content_type", fetched.get("content_type"));
+            putIfPresent(item, "extraction_method", fetched.get("extraction_method"));
+            putIfPresent(item, "page_count", fetched.get("page_count"));
+            putIfPresent(item, "pages_extracted", fetched.get("pages_extracted"));
+            putIfPresent(item, "metadata_conflicts", fetched.get("metadata_conflicts"));
             item.put("retrieved_at", fetched.get("retrieved_at"));
             item.put("excerpt", excerpt.text());
             item.put("relevance_score", excerpt.relevanceScore());
@@ -358,6 +368,13 @@ public class WebResearchToolProvider {
 
     private static String string(Object value) {
         return value == null ? "" : String.valueOf(value);
+    }
+
+    private static void putIfPresent(Map<String, Object> target, String key, Object value) {
+        if (value == null) return;
+        if (value instanceof String string && string.isBlank()) return;
+        if (value instanceof List<?> list && list.isEmpty()) return;
+        target.put(key, value);
     }
 
     private static String usefulMessage(Exception error) {
