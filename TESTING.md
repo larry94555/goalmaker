@@ -227,7 +227,8 @@ ask.bat "Find the official Java 17 documentation for records and summarize the d
 ```
 
 Expected: after the configured failure threshold, the SearXNG circuit opens and the request continues through
-DuckDuckGo plus applicable specialized providers. Check health:
+the DuckDuckGo HTML endpoint, then DuckDuckGo Lite if the HTML endpoint is blocked or empty, plus applicable
+specialized providers. Check health:
 
 ```bat
 curl.exe -s http://localhost:8080/health/web-search
@@ -381,7 +382,8 @@ This checklist was reviewed against the current web-search implementation and ro
 | --- | --- | --- |
 | Mandatory research-first information flow | Prompt 1 | `IntermediaryFlowTest`, `PromptControllerTest` |
 | SearXNG JSON search, retries, deduplication, cache | Prompts 1 and 13 | `WebSearchToolProviderTest` |
-| DuckDuckGo fallback | Outage test | `WebSearchToolProviderTest` |
+| DuckDuckGo HTML fallback | Outage test | `WebSearchToolProviderTest` |
+| DuckDuckGo Lite fallback when SearXNG fails and HTML is blocked | Outage test | `WebSearchToolProviderTest` |
 | Language, recency, paging, safe search, categories | Prompt 7 | `WebSearchToolProviderTest` request assertions |
 | Lexical (BM25) re-ranking of search results | Prompts 1 and 6 | `WebSearchToolProviderTest`, `LexicalRankerTest` |
 | Relevance-ranked research candidates and excerpt sentences | Prompts 1 and 6 | `WebResearchToolProviderTest`, `LexicalRankerTest` |

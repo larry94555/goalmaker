@@ -183,6 +183,7 @@ class ToolIntegrationTest {
         ReflectionTestUtils.setField(search, "searxngUrl", "");
         ReflectionTestUtils.setField(search, "duckDuckGoUrl",
                 "http://127.0.0.1:" + searchServer.getAddress().getPort() + "/ddg");
+        ReflectionTestUtils.setField(search, "duckDuckGoLiteUrl", "");
         ReflectionTestUtils.setField(search, "retryDelayMillis", 0L);
         ToolCatalog catalog = new ToolCatalog(
                 new SkillToolProvider(mapper), new McpToolProvider(mapper), search, null);

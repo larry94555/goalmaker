@@ -24,6 +24,8 @@ public class WebSearchToolProvider {
     private String searxngUrl = "http://127.0.0.1:8888/search";
     @Value("${web.search.duckduckgo-url:${web.search.endpoint:https://html.duckduckgo.com/html/}}")
     private String duckDuckGoUrl = "https://html.duckduckgo.com/html/";
+    @Value("${web.search.duckduckgo-lite-url:https://lite.duckduckgo.com/lite/}")
+    private String duckDuckGoLiteUrl = "https://lite.duckduckgo.com/lite/";
     @Value("${web.search.max-attempts:2}") private int maxAttempts = 2;
     @Value("${web.search.retry-delay-millis:250}") private long retryDelayMillis = 250;
     @Value("${web.search.max-response-bytes:1048576}") private int maxResponseBytes = 1_048_576;
@@ -87,8 +89,8 @@ public class WebSearchToolProvider {
         schema.put("required", List.of("query"));
         return List.of(new ToolDefinition(
                 "web_search",
-                "Search the web using local SearXNG with resilient DuckDuckGo fallback. Returns structured, "
-                        + "relevance-ranked, sourced results.",
+                "Search the web using local SearXNG with a resilient DuckDuckGo HTML then DuckDuckGo Lite "
+                        + "fallback. Returns structured, relevance-ranked, sourced results.",
                 schema,
                 "builtin:web_search",
                 true,
@@ -172,6 +174,10 @@ public class WebSearchToolProvider {
         }
         if (duckDuckGoUrl != null && !duckDuckGoUrl.isBlank()) {
             providers.add(new DuckDuckGoSearchProvider(duckDuckGoUrl, http,
+                    maxAttempts, retryDelayMillis, maxResponseBytes));
+        }
+        if (duckDuckGoLiteUrl != null && !duckDuckGoLiteUrl.isBlank()) {
+            providers.add(new DuckDuckGoLiteSearchProvider(duckDuckGoLiteUrl, http,
                     maxAttempts, retryDelayMillis, maxResponseBytes));
         }
         return providers;

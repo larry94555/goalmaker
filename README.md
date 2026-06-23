@@ -88,9 +88,10 @@ web.research.claim-analysis.max-evidence-chars=600
 web.research.claim-analysis.max-output-chars=50000
 ```
 
-`web_search` prefers the structured JSON API of a local SearXNG instance and falls back to DuckDuckGo HTML when
-SearXNG is unavailable or returns no results. Query-aware providers are then blended when the classifier selects
-them. The tool supports `query`, `max_results`, `language`, `time_range`, `page`, `safe_search`, and SearXNG
+`web_search` prefers the structured JSON API of a local SearXNG instance and falls back to DuckDuckGo HTML, then
+to the more tolerant DuckDuckGo Lite front end, whenever the preceding provider is unavailable, blocked, or
+returns no results. This keeps the token-free path working even when SearXNG is not running and the HTML endpoint
+is rate-limited or serves a captcha. Query-aware providers are then blended when the classifier selects them. The tool supports `query`, `max_results`, `language`, `time_range`, `page`, `safe_search`, and SearXNG
 `categories`. To improve ordering it gathers a larger candidate pool than requested, then returns the
 `max_results` best after re-ranking every candidate by lexical (BM25) relevance to the query; ties keep the
 providers' original order, so a query with no lexical overlap degrades gracefully to the previous behavior.
@@ -137,8 +138,9 @@ is not yet on `PATH`. GoalMaker does not stop the container when the application
 
 Its JSON API is bound to `127.0.0.1:8888`; it is not exposed to the network. Replace the placeholder secret in
 `searxng/settings.yml` before changing that binding. If Docker or SearXNG is unavailable, GoalMaker continues
-through DuckDuckGo automatically. See the [SearXNG Search API](https://docs.searxng.org/dev/search_api.html)
-for supported query controls.
+through DuckDuckGo HTML and then DuckDuckGo Lite automatically. Set `web.search.duckduckgo-url=` or
+`web.search.duckduckgo-lite-url=` to blank to disable either fallback. See the
+[SearXNG Search API](https://docs.searxng.org/dev/search_api.html) for supported query controls.
 
 `web_fetch` follows at most five redirects and accepts public HTTP(S) HTML, text, and PDF documents. A
 readability-oriented HTML extractor removes common page noise and prefers semantic article content. It records
