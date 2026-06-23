@@ -42,7 +42,8 @@ ask.bat "Find the current stable Spring Boot release. Give the version and relea
 ```
 
 Expected: the request uses `web_research` before answering, cites fetched sources, and reports when the
-independent-source threshold is not met. The application log should show `web_research` as the first tool call.
+independent-source threshold is not met. It should use claim-level analysis when available and disclose its
+uncertainty or conflicts. The application log should show `web_research` as the first tool call.
 
 ### 2. Current news and GDELT routing
 
@@ -173,6 +174,43 @@ ask.bat "Find three independent primary sources that document the exact phrase g
 
 Expected: the answer does not turn a lack of evidence into confidence. `corroboration` reports partial or
 insufficient sources, and source fetch failures remain visible to the model.
+
+### 15. Claim-level support with resolved citations
+
+```bat
+ask.bat "Use at least two independent sources to verify the capital of France. Report claim_analysis.status, every normalized claim and relationship, each source_id and URL, uncertainty, source-quality notes, and missing evidence before answering."
+```
+
+Expected: evidence records have stable IDs such as `S1` and `S2`. When comparable sources support the same fact,
+`claim_analysis.status` is `analyzed`, the relationship is `support`, and every source position resolves to a URL,
+domain, and `evidence[Sx].excerpt` reference. Retrieval facts remain separate from model judgments.
+
+### 16. Contradiction and date/version drift
+
+```bat
+ask.bat "Research how many moons Saturn has using current and older dated sources. Do not merge counts from different observation dates. Report claim_analysis claim groups, temporal context, contradictions, minority positions, uncertainty, and missing evidence."
+```
+
+Expected: dated counts are not treated as directly comparable without temporal context. Genuine disagreement for
+the same date or scope is labeled `contradiction`; version or date drift remains in separate claim groups or is
+labeled partial overlap. Older minority evidence must not disappear merely because newer sources are more numerous.
+
+### 17. Partial overlap and incomparable claims
+
+```bat
+ask.bat "Compare independent claims that Spring Boot 4 improves startup, distinguishing startup speed, diagnostics, and observability. Report support, partial overlap, incomparable claims, source limitations, and what benchmark evidence is missing."
+```
+
+Expected: claims about different startup properties are not collapsed into one agreement. Comparable evidence may
+be `partial_overlap`; unrelated claims remain separate. Every group includes uncertainty, source-quality notes,
+and missing-evidence text.
+
+### 18. Explicit analyzer disable fallback
+
+Set `web.research.claim-analysis.enabled=false`, restart GoalMaker, and run prompt 15 again.
+
+Expected: research evidence is still returned, `claim_analysis.status=disabled`, corroboration does not claim
+semantic agreement, and the main model compares cited evidence directly. Restore the setting to `true` afterward.
 
 ## Outage And Recovery Tests
 
@@ -317,7 +355,7 @@ Run the complete deterministic suite. It makes no public-network calls:
 Run only fetch and research tests while iterating:
 
 ```bat
-.\mvnw.cmd -B -ntp "-Dtest=WebFetchToolProviderTest,WebResearchToolProviderTest,FetchWorkerClientTest,PinnedDnsTest,FetchBudgetTest" test
+.\mvnw.cmd -B -ntp "-Dtest=ClaimAnalysisServiceTest,WebFetchToolProviderTest,WebResearchToolProviderTest,FetchWorkerClientTest,PinnedDnsTest,FetchBudgetTest" test
 ```
 
 Run the opt-in public integration suite with local SearXNG available:
@@ -352,7 +390,12 @@ This checklist was reviewed against the current web-search implementation and ro
 | Intent routing, blending, provenance, provider failure isolation | Prompt 6 | `SpecializedSearchServiceTest` |
 | Provider rate limits and independent caches | Prompts 2 through 6 and 13 | `SpecializedSearchServiceTest` |
 | Diverse concurrent fetches and source sufficiency | Prompts 1 and 14 | `WebResearchToolProviderTest` |
-| Fetch failures and semantic-conflict warning | Prompts 1 and 14 | `WebResearchToolProviderTest` |
+| Fetch failures and semantic-analysis fallback | Prompts 1, 14, and 18 | `WebResearchToolProviderTest`, `ClaimAnalysisServiceTest` |
+| Stable source IDs and resolved URL/excerpt references | Prompt 15 | `ClaimAnalysisServiceTest`, `WebResearchToolProviderTest` |
+| Agreement, contradiction, and minority evidence | Prompts 15 and 16 | `ClaimAnalysisServiceTest` |
+| Date/version drift and incomparable claim separation | Prompts 16 and 17 | `ClaimAnalysisServiceTest` |
+| Partial overlap, uncertainty, quality, and missing evidence | Prompt 17 | `ClaimAnalysisServiceTest` |
+| Invented references, malformed output, and timeout fallback | Prompt 18 | `ClaimAnalysisServiceTest` |
 | Readable HTML and multilingual text | Prompt 8 | `WebFetchToolProviderTest` |
 | Canonical URL, author, dates, language, metadata conflicts | Prompts 8 and 10 | `WebFetchToolProviderTest` |
 | Plain-text extraction | Prompt 1 source dependent | `WebFetchToolProviderTest` |
@@ -380,5 +423,5 @@ This checklist was reviewed against the current web-search implementation and ro
 The prompt suite covers every user-visible web-search capability. Network-sensitive and process-isolation cases
 have deterministic fixtures; Docker enforcement has an opt-in live test. The PDF timeout itself is enforced with
 a cancellable bounded future and a parent-enforced worker deadline, while the suite avoids a deliberately
-CPU-consuming PDF fixture. The next roadmap priority is claim-level semantic agreement and conflict analysis,
-because source-count sufficiency still does not prove that evidence supports the same claims.
+CPU-consuming PDF fixture. The next roadmap priority is a versioned search-quality benchmark with regression
+gates, because retrieval and semantic-analysis changes now need repeatable relevance and citation measurements.

@@ -41,7 +41,21 @@ class WebResearchToolProviderTest {
         fetch.add("https://independent.example.net/review", "Independent review",
                 "The review explains Spring Boot 4.0 compatibility changes for application developers.");
         fetch.requireConcurrency();
-        WebResearchToolProvider research = new WebResearchToolProvider(mapper, search, fetch);
+        ClaimAnalysisService analyzer = new ClaimAnalysisService(mapper, (messages, tokens) -> """
+                {"claim_groups":[{
+                  "normalized_claim":"Spring Boot 4.0 improves startup diagnostics.",
+                  "relationship":"support",
+                  "source_positions":[
+                    {"source_id":"S1","position":"supports","source_claim":"The release identifies improved diagnostics."},
+                    {"source_id":"S2","position":"supports","source_claim":"The analysis reports improved diagnostics."}
+                  ],
+                  "temporal_context":"Spring Boot 4.0",
+                  "uncertainty":"Other changes were not compared.",
+                  "source_quality_notes":"The sources come from independent domains.",
+                  "missing_evidence":"none"
+                }]}
+                """);
+        WebResearchToolProvider research = new WebResearchToolProvider(mapper, search, fetch, analyzer);
         ReflectionTestUtils.setField(research, "maxConcurrency", 4);
         ToolCatalog catalog = catalog(search, fetch, research);
 
@@ -59,8 +73,12 @@ class WebResearchToolProviderTest {
         assertTrue(payload.path("evidence").toString().contains("Spring Boot 4.0"));
         assertTrue(payload.path("evidence").path(0).has("evidence_score"));
         assertEquals(1, payload.path("fetch_failures").size());
-        assertTrue(payload.path("corroboration").path("assessment").asText()
-                .contains("semantic agreement still requires review"));
+        assertEquals("analyzed", payload.path("corroboration").path("claim_analysis_status").asText());
+        assertEquals("support", payload.path("corroboration").path("semantic_relationship").asText());
+        assertFalse(payload.path("corroboration").path("conflict_review_required").asBoolean());
+        assertEquals("support", payload.path("claim_analysis").path("model_judgments")
+                .path("overall_relationship").asText());
+        assertEquals("S1", payload.path("evidence").path(0).path("source_id").asText());
         assertEquals(5, fetch.calls.size());
         assertTrue(fetch.maxActive.get() >= 2);
     }
@@ -80,8 +98,9 @@ class WebResearchToolProviderTest {
         assertEquals("partial_sources", payload.path("corroboration").path("status").asText());
         assertFalse(payload.path("corroboration").path("source_threshold_met").asBoolean());
         assertEquals(1, payload.path("evidence").size());
-        assertEquals("The independent-source threshold was not met.",
-                payload.path("corroboration").path("assessment").asText());
+        assertEquals("disabled", payload.path("corroboration").path("claim_analysis_status").asText());
+        assertTrue(payload.path("corroboration").path("assessment").asText()
+                .startsWith("The independent-source threshold was not met."));
     }
 
     @Test
@@ -135,6 +154,7 @@ class WebResearchToolProviderTest {
         assertEquals(1, evidence.path("metadata_conflicts").size());
         assertTrue(evidence.path("fetch_policy").path("dns_pinned").asBoolean());
         assertEquals("worker-process", evidence.path("fetch_isolation").path("mode").asText());
+        assertEquals("S1", evidence.path("source_id").asText());
     }
 
     private ToolCatalog catalog(WebSearchToolProvider search, WebFetchToolProvider fetch,

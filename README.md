@@ -55,12 +55,36 @@ Each result retains its provider and engine provenance. A specialized provider f
 `web_research` accepts `query`, `max_sources`, `min_sources`, `language`, `time_range`, `safe_search`, and
 SearXNG `categories`. It prefers one source per registrable domain, ranks candidates using search position and
 bounded source signals, extracts the most query-relevant sentences, and returns citation-ready evidence with
-titles, URLs, domains, publication and retrieval times, ranking details, and fetch failures.
+stable source IDs, titles, URLs, domains, publication and retrieval times, ranking details, and fetch failures.
 
-The `corroboration` object reports whether the requested independent-source threshold was met. This is a
-structural source check, not a claim that the sources semantically agree. When multiple sources are returned,
-the model is required to compare them and disclose material conflicts. When the threshold is not met, the model
-must say so and may use `web_search` and `web_fetch` for additional investigation.
+The `corroboration` object separately reports the structural independent-source threshold and the semantic
+relationship found by claim analysis. After evidence selection, a bounded tool-free call to the local
+`llama-server` extracts comparable claim groups and labels each as `support`, `contradiction`,
+`partial_overlap`, or `insufficient_evidence`. Different dates, versions, scopes, and subjects remain separate;
+minority positions are preserved rather than reduced to a majority answer.
+
+`claim_analysis.retrieval_facts` contains deterministic evidence counts and source IDs.
+`claim_analysis.model_judgments` contains the local model's interpretations, including normalized claims,
+resolved source positions, temporal context, uncertainty, source-quality notes, missing evidence, and an
+aggregate relationship. Every source position is validated against a fetched `S1` through `S5` evidence record
+and receives its URL, domain, and exact excerpt reference from application data. Invented source IDs and malformed
+groups are discarded; an unsupported relationship is downgraded to `insufficient_evidence`.
+
+Claim analysis never receives tools and treats excerpts as untrusted data. A timeout, unavailable local model,
+or invalid model response does not discard retrieved evidence or fail `web_research`; `claim_analysis.status`
+reports `unavailable` or `invalid_model_output`, and the main model is instructed to compare the evidence
+directly. Set `web.research.claim-analysis.enabled=false` to disable the extra local-model pass explicitly.
+
+The default analysis limits are:
+
+```properties
+web.research.claim-analysis.enabled=true
+web.research.claim-analysis.timeout-seconds=60
+web.research.claim-analysis.max-tokens=1200
+web.research.claim-analysis.max-claims=8
+web.research.claim-analysis.max-evidence-chars=600
+web.research.claim-analysis.max-output-chars=50000
+```
 
 `web_search` prefers the structured JSON API of a local SearXNG instance and falls back to DuckDuckGo HTML when
 SearXNG is unavailable or returns no results. Query-aware providers are then blended when the classifier selects
@@ -192,7 +216,8 @@ All research, search, and fetched content is fenced as untrusted external data b
 prompt-injection phrases receive an additional warning, but the untrusted boundary applies to every result.
 Timeouts, retry limits, cache behavior, provider URLs, response sizes, redirects, fetch text limits, worker
 resources, allowed ports, total fetch budgets, health intervals, circuit breaking, optional Compose startup,
-source thresholds, candidate count, and research concurrency are configurable in `application.properties`.
+source thresholds, candidate count, research concurrency, and claim-analysis budgets are configurable in
+`application.properties`.
 
 With local SearXNG running, execute the optional live integration check with:
 
