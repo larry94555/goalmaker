@@ -33,31 +33,39 @@ public class WebSearchToolProvider {
     private final ObjectMapper mapper;
     private final WebHttpClient http;
     private final SpecializedSearchService specializedSearch;
+    private final SearxngHealthManager searxngHealth;
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
 
     public WebSearchToolProvider() {
-        this(new ObjectMapper(), (SpecializedSearchService) null);
+        this(new ObjectMapper(), (SpecializedSearchService) null, (SearxngHealthManager) null);
     }
 
     public WebSearchToolProvider(ObjectMapper mapper) {
-        this(mapper, (SpecializedSearchService) null);
+        this(mapper, (SpecializedSearchService) null, (SearxngHealthManager) null);
     }
 
     @Autowired
-    public WebSearchToolProvider(ObjectMapper mapper, SpecializedSearchService specializedSearch) {
-        this(mapper, specializedSearch, HttpClient.newBuilder()
+    public WebSearchToolProvider(ObjectMapper mapper, SpecializedSearchService specializedSearch,
+                                 SearxngHealthManager searxngHealth) {
+        this(mapper, specializedSearch, searxngHealth, HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .connectTimeout(Duration.ofSeconds(10))
                 .build());
     }
 
     WebSearchToolProvider(ObjectMapper mapper, HttpClient client) {
-        this(mapper, null, client);
+        this(mapper, null, null, client);
     }
 
     WebSearchToolProvider(ObjectMapper mapper, SpecializedSearchService specializedSearch, HttpClient client) {
+        this(mapper, specializedSearch, null, client);
+    }
+
+    WebSearchToolProvider(ObjectMapper mapper, SpecializedSearchService specializedSearch,
+                          SearxngHealthManager searxngHealth, HttpClient client) {
         this.mapper = mapper;
         this.specializedSearch = specializedSearch;
+        this.searxngHealth = searxngHealth;
         this.http = new WebHttpClient(client);
     }
 
@@ -96,18 +104,23 @@ public class WebSearchToolProvider {
         if (cached != null && cached.expiresAt().isAfter(Instant.now())) {
             Map<String, Object> payload = new LinkedHashMap<>(cached.payload());
             payload.put("cached", true);
+            if (searxngHealth != null) payload.put("searxng_health", searxngHealth.summary());
             return payload;
         }
 
-        List<SearchProvider> providers = providers();
         List<String> attempted = new ArrayList<>();
         List<String> errors = new ArrayList<>();
+        List<SearchProvider> providers = providers(errors);
         List<SearchResult> selected = List.of();
         String selectedProvider = "none";
         for (SearchProvider provider : providers) {
             attempted.add(provider.name());
+            long started = System.nanoTime();
             try {
                 List<SearchResult> results = deduplicate(provider.search(request), request.maxResults());
+                if ("searxng".equals(provider.name()) && searxngHealth != null) {
+                    searxngHealth.recordSearchSuccess(elapsedMillis(started));
+                }
                 if (!results.isEmpty()) {
                     selected = results;
                     selectedProvider = provider.name();
@@ -115,7 +128,11 @@ public class WebSearchToolProvider {
                 }
                 errors.add(provider.name() + ": no results");
             } catch (Exception error) {
-                errors.add(provider.name() + ": " + usefulMessage(error));
+                String message = usefulMessage(error);
+                if ("searxng".equals(provider.name()) && searxngHealth != null) {
+                    searxngHealth.recordSearchFailure(message);
+                }
+                errors.add(provider.name() + ": " + message);
             }
         }
 
@@ -137,11 +154,18 @@ public class WebSearchToolProvider {
         return payload;
     }
 
-    private List<SearchProvider> providers() {
+    private List<SearchProvider> providers(List<String> errors) {
         List<SearchProvider> providers = new ArrayList<>();
         if (searxngUrl != null && !searxngUrl.isBlank()) {
-            providers.add(new SearxngSearchProvider(searxngUrl, http, mapper,
-                    maxAttempts, retryDelayMillis, maxResponseBytes));
+            SearxngHealthManager.SearchPermission permission = searxngHealth == null
+                    ? new SearxngHealthManager.SearchPermission(true, "health manager is not configured")
+                    : searxngHealth.acquireSearchPermission();
+            if (permission.allowed()) {
+                providers.add(new SearxngSearchProvider(searxngUrl, http, mapper,
+                        maxAttempts, retryDelayMillis, maxResponseBytes));
+            } else {
+                errors.add("searxng: skipped; " + permission.reason());
+            }
         }
         if (duckDuckGoUrl != null && !duckDuckGoUrl.isBlank()) {
             providers.add(new DuckDuckGoSearchProvider(duckDuckGoUrl, http,
@@ -167,6 +191,7 @@ public class WebSearchToolProvider {
         payload.put("cached", false);
         payload.put("retrieved_at", Instant.now().toString());
         payload.put("result_count", results.size());
+        if (searxngHealth != null) payload.put("searxng_health", searxngHealth.summary());
         List<Map<String, Object>> serialized = new ArrayList<>();
         for (int index = 0; index < results.size(); index++) {
             SearchResult result = results.get(index);
@@ -252,6 +277,11 @@ public class WebSearchToolProvider {
     private static String usefulMessage(Exception error) {
         String message = error.getMessage();
         return message == null || message.isBlank() ? error.getClass().getSimpleName() : message;
+    }
+
+    private static long elapsedMillis(long started) {
+        return Math.max(0, java.util.concurrent.TimeUnit.NANOSECONDS
+                .toMillis(System.nanoTime() - started));
     }
 
     private static Map<String, Object> stringProperty(String description) {

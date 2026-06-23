@@ -9,7 +9,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -121,6 +123,54 @@ class WebSearchToolProviderTest {
         assertEquals("ERROR: query is required", result);
     }
 
+    @Test
+    void skipsOpenSearxngCircuitAndReturnsAfterBackgroundRecovery() throws Exception {
+        AtomicInteger searxCalls = new AtomicInteger();
+        AtomicInteger duckCalls = new AtomicInteger();
+        AtomicReference<SearxngHealthManager.ProbeResult> probeResult = new AtomicReference<>(
+                SearxngHealthManager.ProbeResult.failure(1, "connection refused"));
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/searx", exchange -> {
+            searxCalls.incrementAndGet();
+            send(exchange, 200, "application/json", """
+                    {"results":[{"title":"Recovered","url":"https://recovered.example/page",
+                    "content":"Recovered source","engine":"recovered-engine"}]}
+                    """);
+        });
+        server.createContext("/ddg", exchange -> {
+            duckCalls.incrementAndGet();
+            send(exchange, 200, "text/html", searchResults(2));
+        });
+        server.start();
+        try {
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+            SearxngHealthManager health = healthManager(base + "/searx", probeResult);
+            health.probeNow();
+            WebSearchToolProvider provider = new WebSearchToolProvider(
+                    mapper, null, health, HttpClient.newHttpClient());
+            ReflectionTestUtils.setField(provider, "searxngUrl", base + "/searx");
+            ReflectionTestUtils.setField(provider, "duckDuckGoUrl", base + "/ddg");
+            ReflectionTestUtils.setField(provider, "maxAttempts", 1);
+            ToolCatalog catalog = catalog(provider);
+
+            JsonNode fallback = payload(catalog.execute("web_search", Map.of("query", "first query")));
+            assertEquals("duckduckgo", fallback.path("provider").asText());
+            assertEquals(0, searxCalls.get());
+            assertEquals(1, duckCalls.get());
+            assertTrue(fallback.path("provider_notes").path(0).asText().contains("circuit is open"));
+            assertEquals("unavailable", fallback.path("searxng_health").path("status").asText());
+
+            probeResult.set(SearxngHealthManager.ProbeResult.success(5));
+            health.probeNow();
+            JsonNode recovered = payload(catalog.execute("web_search", Map.of("query", "second query")));
+            assertEquals("searxng", recovered.path("provider").asText());
+            assertEquals(1, searxCalls.get());
+            assertEquals("healthy", recovered.path("searxng_health").path("status").asText());
+        } finally {
+            server.stop(0);
+        }
+    }
+
     private WebSearchToolProvider provider(String searxng, String duckDuckGo) {
         WebSearchToolProvider provider = new WebSearchToolProvider(mapper);
         ReflectionTestUtils.setField(provider, "searxngUrl", searxng);
@@ -134,6 +184,18 @@ class WebSearchToolProviderTest {
                 new SkillToolProvider(mapper), new McpToolProvider(mapper), provider, null);
         catalog.refresh();
         return catalog;
+    }
+
+    private static SearxngHealthManager healthManager(
+            String endpoint, AtomicReference<SearxngHealthManager.ProbeResult> probeResult) {
+        SearxngHealthManager.Config config = new SearxngHealthManager.Config(
+                endpoint, false, Duration.ofSeconds(30), Duration.ofSeconds(1), 2,
+                Duration.ofSeconds(30), Duration.ofMillis(100),
+                Duration.ofSeconds(1), Duration.ofMillis(1),
+                "docker", "compose.yml", "compose.log", Duration.ofSeconds(1));
+        return new SearxngHealthManager(config, ignored -> probeResult.get(),
+                ignored -> SearxngHealthManager.StartResult.failed("not expected"),
+                new SearxngHealthManagerTest.MutableClock());
     }
 
     private JsonNode payload(String wrapped) throws Exception {
