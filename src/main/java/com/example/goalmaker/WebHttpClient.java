@@ -26,6 +26,13 @@ final class WebHttpClient {
 
     Response get(URI uri, String accept, Duration timeout, int maxAttempts,
                  long retryDelayMillis, int maxBytes) throws Exception {
+        BinaryResponse response = getBytes(uri, accept, timeout, maxAttempts, retryDelayMillis, maxBytes);
+        return new Response(response.status(), response.headers(),
+                new String(response.body(), charset(response.headers())), response.truncated());
+    }
+
+    BinaryResponse getBytes(URI uri, String accept, Duration timeout, int maxAttempts,
+                            long retryDelayMillis, int maxBytes) throws Exception {
         Exception lastFailure = null;
         int attempts = Math.max(1, maxAttempts);
         for (int attempt = 1; attempt <= attempts; attempt++) {
@@ -38,12 +45,12 @@ final class WebHttpClient {
                         .build();
                 HttpResponse<InputStream> response = client.send(
                         request, HttpResponse.BodyHandlers.ofInputStream());
-                Body body;
+                BinaryBody body;
                 try (InputStream stream = response.body()) {
-                    body = readBody(stream, response.headers(), maxBytes);
+                    body = readBody(stream, maxBytes);
                 }
-                Response result = new Response(response.statusCode(), response.headers(),
-                        body.text(), body.truncated());
+                BinaryResponse result = new BinaryResponse(response.statusCode(), response.headers(),
+                        body.bytes(), body.truncated());
                 if (!retryable(response.statusCode()) || attempt == attempts) return result;
                 sleep(retryDelay(response.headers(), retryDelayMillis, attempt));
             } catch (IOException error) {
@@ -55,12 +62,16 @@ final class WebHttpClient {
         throw lastFailure == null ? new IOException("web request failed") : lastFailure;
     }
 
-    private static Body readBody(InputStream stream, HttpHeaders headers, int maxBytes) throws IOException {
+    private static BinaryBody readBody(InputStream stream, int maxBytes) throws IOException {
         int limit = Math.max(1, maxBytes);
         byte[] bytes = stream.readNBytes(limit + 1);
         boolean truncated = bytes.length > limit;
         int length = Math.min(bytes.length, limit);
-        return new Body(new String(bytes, 0, length, charset(headers)), truncated);
+        return new BinaryBody(java.util.Arrays.copyOf(bytes, length), truncated);
+    }
+
+    static String decode(BinaryResponse response) {
+        return new String(response.body(), charset(response.headers()));
     }
 
     private static Charset charset(HttpHeaders headers) {
@@ -113,5 +124,7 @@ final class WebHttpClient {
 
     record Response(int status, HttpHeaders headers, String body, boolean truncated) {}
 
-    private record Body(String text, boolean truncated) {}
+    record BinaryResponse(int status, HttpHeaders headers, byte[] body, boolean truncated) {}
+
+    private record BinaryBody(byte[] bytes, boolean truncated) {}
 }

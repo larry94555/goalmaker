@@ -37,46 +37,54 @@ providers. Background probes remain active and restore SearXNG after recovery. O
 explicitly configurable, waits for readiness without blocking Spring Boot startup, and remains off by default.
 Tests cover healthy, slow, malformed, unavailable, recovery, managed-startup, and disabled behavior.
 
+### Better document extraction
+
+`web_fetch` now handles public HTML, text, and PDF documents. HTML extraction uses bounded readability scoring
+and captures canonical URLs, title, author, publication and modification dates, language, and metadata conflicts.
+PDF extraction uses PDFBox under byte, page, character, and time budgets and never executes embedded active
+content.
+
+RFC 9309 robots rules are checked for every document and redirect origin, cached with bounded storage, and
+reported in fetch provenance. Research evidence now preserves content type, extraction method, canonical URL,
+author, dates, page counts, and metadata conflicts. Deterministic tests cover representative HTML, multilingual
+text, metadata conflicts, robots exclusions and caching, valid and malformed PDFs, byte and page limits,
+redirects, private targets, and provenance propagation.
+
 ## Next Recommended Change
 
-### 1. Better document extraction
+### 1. Stronger fetch isolation
 
-Add robust PDF extraction, metadata and publication-date detection, canonical URL handling, robots-policy
-support, and a readability-oriented HTML extractor with bounded per-site fallback rules.
+Move web fetching and document parsing into a restricted process or container with network egress controls. Pin
+DNS resolution through the connection to close rebinding gaps, restrict destination ports, and apply a total
+request budget across robots checks, redirects, downloads, and parsing.
 
-This is the next recommended high-value change because retrieval now has broad and resilient discovery, while
-the quality of the final answer is increasingly limited by how accurately `web_fetch` extracts the selected
-sources. Better extraction improves evidence quality for nearly every researched request.
+This is now the highest-value remaining improvement because GoalMaker processes arbitrary public documents. The
+current in-process checks substantially reduce risk, but process isolation provides a stronger boundary against
+malformed documents, parser vulnerabilities, DNS rebinding, and resource exhaustion without requiring a paid
+service or API token.
 
 Completion criteria:
 
-- extract bounded text and metadata from PDFs without executing active content
-- prefer article/main content through a readability-oriented extractor with current selectors as fallback
-- detect canonical URLs, title, author, publication date, and modification date when present
-- honor explicit robots exclusions and report when extraction is intentionally skipped
-- preserve content type, extraction method, page count, and truncation details in fetch provenance
-- apply per-document time, byte, page, and character budgets
-- test representative HTML, PDF, malformed, oversized, redirect, multilingual, and metadata-conflict cases
+- run fetch and parsing work outside the Spring Boot process with strict CPU, memory, wall-clock, and output limits
+- permit only public HTTP(S) egress on approved ports and bind the validated DNS result to the connection
+- enforce one total budget across robots checks and all redirects instead of independent per-request budgets
+- preserve the current structured fetch result and error contract
+- test DNS rebinding, redirect loops, slow streams, decompression bombs, parser crashes, and worker recovery
 
 ## Later Priorities
 
-### 2. Stronger fetch isolation
-
-Move web fetching into a restricted process or container with network egress controls. Pin DNS resolution through
-the connection to close rebinding gaps, restrict ports, and apply total request budgets across redirects.
-
-### 3. Claim-level agreement and conflict analysis
+### 2. Claim-level agreement and conflict analysis
 
 Use the local model to extract comparable claims from evidence, identify material agreement or contradiction,
 and attach source references to each finding. Keep retrieval facts separate from model judgments and expose
 uncertainty explicitly.
 
-### 4. Search quality evaluation
+### 3. Search quality evaluation
 
 Maintain a versioned set of factual, current, technical, multilingual, and adversarial queries. Track provider
 availability, precision, source diversity, latency, cache effectiveness, and citation correctness over time.
 
-### 5. Optional independent local index
+### 4. Optional independent local index
 
 Evaluate YaCy or a focused local crawler for private corpora, intranet search, and resilience when public search
 providers are unavailable. Keep it optional because crawling and index maintenance have substantial resource cost.
