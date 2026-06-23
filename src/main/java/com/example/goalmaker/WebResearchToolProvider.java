@@ -37,13 +37,20 @@ public class WebResearchToolProvider {
     private final ObjectMapper mapper;
     private final WebSearchToolProvider search;
     private final WebFetchToolProvider fetch;
+    private final ClaimAnalysisService claimAnalyzer;
 
     @Autowired
     public WebResearchToolProvider(ObjectMapper mapper, WebSearchToolProvider search,
-                                   WebFetchToolProvider fetch) {
+                                   WebFetchToolProvider fetch, ClaimAnalysisService claimAnalyzer) {
         this.mapper = mapper;
         this.search = search;
         this.fetch = fetch;
+        this.claimAnalyzer = claimAnalyzer;
+    }
+
+    public WebResearchToolProvider(ObjectMapper mapper, WebSearchToolProvider search,
+                                   WebFetchToolProvider fetch) {
+        this(mapper, search, fetch, ClaimAnalysisService.disabled(mapper));
     }
 
     public List<ToolDefinition> tools() {
@@ -64,7 +71,7 @@ public class WebResearchToolProvider {
         schema.put("required", List.of("query"));
         return List.of(new ToolDefinition(
                 "web_research",
-                "Search and fetch diverse web sources, then return citation-ready evidence and source sufficiency status.",
+                "Search and fetch diverse web sources, then return citation-ready evidence, source sufficiency, and validated claim-level agreement or conflict analysis.",
                 schema,
                 "builtin:web_research",
                 true,
@@ -95,7 +102,8 @@ public class WebResearchToolProvider {
                 .map(FetchOutcome::evidence)
                 .sorted(Comparator.comparingInt(item -> -integer(item.get("evidence_score"), 0)))
                 .toList();
-        List<Map<String, Object>> evidence = selectEvidence(fetchedEvidence, request.maxSources());
+        List<Map<String, Object>> evidence = withSourceIds(
+                selectEvidence(fetchedEvidence, request.maxSources()));
         List<Map<String, Object>> failures = outcomes.stream()
                 .filter(outcome -> outcome.error() != null)
                 .map(outcome -> Map.<String, Object>of(
@@ -109,6 +117,13 @@ public class WebResearchToolProvider {
         boolean sufficient = evidence.size() >= request.minSources() && domains.size() >= request.minSources();
         String status = sufficient ? "sufficient_sources"
                 : evidence.isEmpty() ? "insufficient_sources" : "partial_sources";
+        Map<String, Object> claimAnalysis = claimAnalyzer.analyze(request.query(), evidence);
+        String claimStatus = string(claimAnalysis.get("status"));
+        String semanticRelationship = semanticRelationship(claimAnalysis);
+        boolean semanticReviewRequired = evidence.size() > 1
+                && (!claimStatus.equals("analyzed")
+                || Set.of("contradiction", "partial_overlap", "insufficient_evidence")
+                .contains(semanticRelationship));
 
         Map<String, Object> corroboration = new LinkedHashMap<>();
         corroboration.put("status", status);
@@ -116,10 +131,10 @@ public class WebResearchToolProvider {
         corroboration.put("evidence_sources", evidence.size());
         corroboration.put("independent_domains", domains.size());
         corroboration.put("source_threshold_met", sufficient);
-        corroboration.put("conflict_review_required", evidence.size() > 1);
-        corroboration.put("assessment", sufficient
-                ? "The independent-source threshold was met; semantic agreement still requires review."
-                : "The independent-source threshold was not met.");
+        corroboration.put("claim_analysis_status", claimStatus);
+        corroboration.put("semantic_relationship", semanticRelationship);
+        corroboration.put("conflict_review_required", semanticReviewRequired);
+        corroboration.put("assessment", corroborationAssessment(sufficient, claimStatus, semanticRelationship));
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("query", request.query());
@@ -138,8 +153,42 @@ public class WebResearchToolProvider {
         }
         payload.put("corroboration", corroboration);
         payload.put("evidence", evidence);
+        payload.put("claim_analysis", claimAnalysis);
         if (!failures.isEmpty()) payload.put("fetch_failures", failures);
         return payload;
+    }
+
+    private static List<Map<String, Object>> withSourceIds(List<Map<String, Object>> evidence) {
+        List<Map<String, Object>> identified = new ArrayList<>();
+        for (int index = 0; index < evidence.size(); index++) {
+            Map<String, Object> item = new LinkedHashMap<>(evidence.get(index));
+            item.put("source_id", "S" + (index + 1));
+            identified.add(item);
+        }
+        return List.copyOf(identified);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String semanticRelationship(Map<String, Object> claimAnalysis) {
+        Object value = claimAnalysis.get("model_judgments");
+        if (!(value instanceof Map<?, ?> judgments)) return "not_analyzed";
+        return string(((Map<String, Object>) judgments).get("overall_relationship"));
+    }
+
+    private static String corroborationAssessment(boolean sufficient, String claimStatus,
+                                                   String relationship) {
+        String threshold = sufficient
+                ? "The independent-source threshold was met."
+                : "The independent-source threshold was not met.";
+        if (!claimStatus.equals("analyzed")) {
+            return threshold + " Claim-level semantic analysis was " + claimStatus.replace('_', ' ') + ".";
+        }
+        return switch (relationship) {
+            case "support" -> threshold + " The validated local-model analysis found comparable support.";
+            case "contradiction" -> threshold + " The validated local-model analysis found a material contradiction.";
+            case "partial_overlap" -> threshold + " The validated local-model analysis found only partial overlap.";
+            default -> threshold + " The validated local-model analysis found insufficient comparable evidence.";
+        };
     }
 
     private static List<Map<String, Object>> selectEvidence(List<Map<String, Object>> ranked, int maximum) {

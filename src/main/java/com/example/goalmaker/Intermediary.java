@@ -268,8 +268,11 @@ public class Intermediary {
         boolean informationRequest = assessment.goals().contains("request-info");
         String webSearchInstruction = informationRequest
                 ? "\n\nThis request asks for information. Call web_research first and answer from its fetched "
-                        + "evidence. Cite source URLs and disclose conflicts or insufficient corroboration. If the "
-                        + "source threshold is not met, use web_search and web_fetch to investigate the gaps."
+                        + "evidence. Use validated claim_analysis groups when available, but identify them as local-model "
+                        + "interpretations rather than retrieved facts. Cite source URLs, preserve minority evidence, and "
+                        + "disclose conflicts, uncertainty, or insufficient corroboration. If claim analysis is unavailable "
+                        + "or the source threshold is not met, compare the evidence directly and use web_search and "
+                        + "web_fetch to investigate material gaps."
                 : "";
         Path saved = null;
         if (plan != null) {

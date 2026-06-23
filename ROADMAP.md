@@ -11,8 +11,8 @@ query-relevant evidence, and returns citation-ready source records. It reports f
 configured independent-source threshold was met. Information requests require this tool before the model can
 answer, while `web_search` and `web_fetch` remain available for follow-up investigation.
 
-Source-threshold sufficiency is deliberately distinct from semantic agreement. The model must compare returned
-evidence and disclose conflicts; GoalMaker does not label two sources as agreeing merely because both were found.
+Source-threshold sufficiency remains deliberately distinct from semantic agreement. Claim analysis compares the
+returned evidence separately, and the answering model must disclose its conflicts, uncertainty, and limitations.
 
 ### Query-aware specialized providers
 
@@ -84,35 +84,47 @@ exercise a real Docker image, HostConfig limits, successful public fetching, and
 application request that is still blocked by the container firewall. The live test also verifies the Java UID,
 empty effective capability set, no-new-privileges state, and read-only root filesystem.
 
+### Claim-level agreement and conflict analysis
+
+After deterministic evidence retrieval, GoalMaker now makes one bounded, tool-free local-model call to extract
+comparable claim groups. It labels support, contradiction, partial overlap, or insufficient evidence while
+keeping different dates, versions, scopes, and subjects separate. Minority positions, uncertainty, source-quality
+limitations, and missing evidence remain explicit.
+
+Stable source IDs connect every model judgment to retrieved evidence. GoalMaker resolves URLs, domains, and
+excerpt references from application-owned data, rejects invented IDs and malformed groups, and downgrades
+relationships unsupported by their source positions. Deterministic retrieval facts and validated local-model
+judgments occupy separate result objects. Analyzer timeout, failure, or invalid output preserves the evidence and
+returns an explicit fallback status instead of failing research.
+
+Tests cover clear agreement, direct contradiction, partial overlap, date/version drift, incomparable claims,
+minority evidence, invented references, malformed output, timeout fallback, and Spring dependency wiring.
+
 ## Next Recommended Change
 
-### 1. Claim-level agreement and conflict analysis
+### 1. Search quality evaluation and regression gates
 
-Use the local model to extract comparable claims from fetched evidence, identify material agreement or
-contradiction, and attach source references to every finding. Keep retrieved facts separate from model judgments,
-represent uncertainty explicitly, and never infer agreement merely because the source threshold was met.
+Create a versioned benchmark of factual, current, technical, scholarly, multilingual, ambiguous, and adversarial
+queries. Capture expected source classes and verifiable claims without freezing volatile answers. Run deterministic
+fixtures on every build and an opt-in public evaluation that records provider availability, evidence relevance,
+source diversity, semantic-analysis validity, citation correctness, latency, and cache behavior.
 
-This is the highest-value remaining answer-quality improvement because discovery, extraction, and isolation are
-now broad and resilient, while corroboration still measures source structure rather than whether sources support
-the same claims.
+This is the highest-value next change because GoalMaker now has a broad retrieval and analysis pipeline, but no
+repeatable way to detect quality regressions or compare routing, ranking, and prompt changes. Measurement should
+come before adding another provider or tuning heuristics by anecdote.
 
 Completion criteria:
 
-- extract concise, normalized claims with source and excerpt references
-- group only genuinely comparable claims and label support, contradiction, partial overlap, or insufficient evidence
-- separate deterministic retrieval facts from local-model interpretations in the result schema
-- preserve minority and conflicting evidence instead of collapsing to a majority answer
-- include uncertainty, source quality, and missing-evidence notes for every assessment
-- test clear agreement, direct contradiction, date/version drift, incomparable claims, and unsupported model output
+- store benchmark cases and expected invariants in a reviewable, versioned format
+- provide deterministic fixtures for routing, ranking, extraction, claim validation, and citation linkage
+- provide opt-in public runs that save timestamped JSON reports without making normal tests network-dependent
+- measure source relevance, independent-domain diversity, unsupported citations, conflicts preserved, and latency
+- compare reports against a checked-in baseline with explicit tolerances and actionable regression output
+- document how to add a case, refresh volatile expectations, and interpret provider outages separately from regressions
 
 ## Later Priorities
 
-### 2. Search quality evaluation
-
-Maintain a versioned set of factual, current, technical, multilingual, and adversarial queries. Track provider
-availability, precision, source diversity, latency, cache effectiveness, and citation correctness over time.
-
-### 3. Optional independent local index
+### 2. Optional independent local index
 
 Evaluate YaCy or a focused local crawler for private corpora, intranet search, and resilience when public search
 providers are unavailable. Keep it optional because crawling and index maintenance have substantial resource cost.
