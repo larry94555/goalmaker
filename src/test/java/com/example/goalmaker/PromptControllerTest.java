@@ -73,7 +73,7 @@ class PromptControllerTest {
         Intermediary intermediary = new Intermediary(llama) {
             @Override
             public IntermediaryResult intercept(String prompt) {
-                return IntermediaryResult.proceed(prompt, "web_search");
+                return IntermediaryResult.proceed(prompt, "web_research");
             }
         };
 
@@ -81,6 +81,6 @@ class PromptControllerTest {
                 .prompt(new PromptController.PromptRequest("What changed?"));
 
         assertEquals(Map.of("response", "researched response"), response);
-        assertEquals(List.of("web_search"), calls);
+        assertEquals(List.of("web_research"), calls);
     }
 }

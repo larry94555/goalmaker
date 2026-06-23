@@ -38,11 +38,21 @@ an MCP server, or `mcp.json`. Tool calls are bounded by `tools.max-iterations` a
 Only install skills and MCP servers you trust. Their commands run locally with the same operating-system
 permissions as goalmaker.
 
-### Web Search
+### Web Research
 
-The built-in `web_search` and `web_fetch` tools require no API token. Every `request-info` forces `web_search`
-as the first model tool call. The execution prompt then directs the model to fetch promising pages, answer from
-page evidence rather than snippets alone, and cite source URLs.
+The built-in `web_research`, `web_search`, and `web_fetch` tools require no API token. Every `request-info`
+forces `web_research` as the first model tool call. It deterministically searches, selects source-diverse
+candidates, fetches pages concurrently, and returns a compact evidence bundle before the model writes an answer.
+
+`web_research` accepts `query`, `max_sources`, `min_sources`, `language`, `time_range`, `safe_search`, and
+SearXNG `categories`. It prefers one source per registrable domain, ranks candidates using search position and
+bounded source signals, extracts the most query-relevant sentences, and returns citation-ready evidence with
+titles, URLs, domains, publication and retrieval times, ranking details, and fetch failures.
+
+The `corroboration` object reports whether the requested independent-source threshold was met. This is a
+structural source check, not a claim that the sources semantically agree. When multiple sources are returned,
+the model is required to compare them and disclose material conflicts. When the threshold is not met, the model
+must say so and may use `web_search` and `web_fetch` for additional investigation.
 
 `web_search` prefers the structured JSON API of a local SearXNG instance and falls back to DuckDuckGo HTML when
 SearXNG is unavailable or returns no results. It supports `query`, `max_results`, `language`, `time_range`,
@@ -68,10 +78,16 @@ URLs resolving to local, private, link-local, or multicast addresses. Each redir
 it is fetched. Keep `web.fetch.allow-private-addresses=false` unless a trusted local integration explicitly
 requires otherwise.
 
-All search and fetched content is fenced as untrusted external data before reaching the model. Common
+All research, search, and fetched content is fenced as untrusted external data before reaching the model. Common
 prompt-injection phrases receive an additional warning, but the untrusted boundary applies to every result.
-Timeouts, retry limits, cache behavior, provider URLs, response sizes, redirects, and fetch text limits are
-configurable in `application.properties`.
+Timeouts, retry limits, cache behavior, provider URLs, response sizes, redirects, fetch text limits, source
+thresholds, candidate count, and research concurrency are configurable in `application.properties`.
+
+With local SearXNG running, execute the optional live integration check with:
+
+```bat
+.\mvnw.cmd -B -ntp -Dgoalmaker.live-web-test=true -Dtest=WebResearchLiveTest test
+```
 
 ### Create A Skill
 
