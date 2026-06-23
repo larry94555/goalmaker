@@ -100,6 +100,20 @@ returns an explicit fallback status instead of failing research.
 Tests cover clear agreement, direct contradiction, partial overlap, date/version drift, incomparable claims,
 minority evidence, invented references, malformed output, timeout fallback, and Spring dependency wiring.
 
+### Lexical relevance re-ranking
+
+Retrieval ordering is now relevance-aware without adding any provider, model call, or API token. A small,
+dependency-free BM25 ranker (`LexicalRanker`) scores candidates against the query using document-frequency
+statistics drawn from the result set itself. `web_search` gathers a larger candidate pool, then returns the best
+results after re-ranking, replacing the previous raw provider ordering; ties preserve provider order so queries
+with no lexical overlap behave exactly as before. `web_research` folds a bounded lexical score into its
+source-authority ranking so an on-topic page is promoted among comparable sources without overriding strong
+domain authority, and selects evidence sentences with the same BM25 scoring instead of binary keyword presence.
+This consolidates the previously duplicated tokenizer and stop-word handling into one reusable component.
+
+Tests cover BM25 tokenization and stop-word filtering, relevant-over-irrelevant scoring, inverse-document-frequency
+weighting, term coverage, and end-to-end re-ranking that promotes a more relevant lower-ranked search result.
+
 ## Next Recommended Change
 
 ### 1. Search quality evaluation and regression gates

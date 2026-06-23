@@ -117,6 +117,35 @@ class WebSearchToolProviderTest {
     }
 
     @Test
+    void reordersResultsByLexicalRelevanceToTheQuery() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/search", exchange -> send(exchange, 200, "application/json", """
+                {"results":[
+                  {"title":"Holiday recipes","url":"https://recipes.example.com/holiday",
+                   "content":"The best holiday cookies and desserts","engine":"alpha"},
+                  {"title":"Java garbage collection tuning","url":"https://docs.example.com/gc",
+                   "content":"Tuning the JVM garbage collector for throughput","engine":"beta"},
+                  {"title":"Local sports news","url":"https://sports.example.com/news",
+                   "content":"Latest scores and standings","engine":"gamma"}
+                ]}
+                """));
+        server.start();
+        try {
+            WebSearchToolProvider provider = provider(
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/search", "");
+            JsonNode result = payload(catalog(provider).execute("web_search", Map.of(
+                    "query", "java garbage collection tuning", "max_results", 3)));
+
+            assertEquals(3, result.path("result_count").asInt());
+            // The most relevant result arrives second from the engine but is ranked first.
+            assertEquals("https://docs.example.com/gc", result.path("results").path(0).path("url").asText());
+            assertEquals(1, result.path("results").path(0).path("rank").asInt());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void rejectsMissingQuery() {
         WebSearchToolProvider provider = provider("", "");
         String result = catalog(provider).execute("web_search", Map.of());
