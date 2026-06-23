@@ -267,8 +267,9 @@ public class Intermediary {
         HighLevelPlan plan = createPlan(prompt, assessment);
         boolean informationRequest = assessment.goals().contains("request-info");
         String webSearchInstruction = informationRequest
-                ? "\n\nThis request asks for information. Call web_search first, then use web_fetch on the "
-                        + "most relevant results before answering. Cite the source URLs and do not rely only on snippets."
+                ? "\n\nThis request asks for information. Call web_research first and answer from its fetched "
+                        + "evidence. Cite source URLs and disclose conflicts or insufficient corroboration. If the "
+                        + "source threshold is not met, use web_search and web_fetch to investigate the gaps."
                 : "";
         Path saved = null;
         if (plan != null) {
@@ -282,7 +283,7 @@ public class Intermediary {
         }
         if (plan == null) {
             return IntermediaryResult.proceed(prompt + webSearchInstruction,
-                    informationRequest ? "web_search" : "");
+                    informationRequest ? "web_research" : "");
         }
         String executionPrompt = "Original request:\n" + prompt
                 + "\n\nApproved high-level plan:\n" + plan.numberedSteps()
@@ -290,7 +291,7 @@ public class Intermediary {
                 + webSearchInstruction
                 + "\n\nCarry out the plan using the available tools. Every action must be performed through "
                 + "an available tool; do not claim an action succeeded unless its tool result confirms it.";
-        return IntermediaryResult.proceed(executionPrompt, informationRequest ? "web_search" : "");
+        return IntermediaryResult.proceed(executionPrompt, informationRequest ? "web_research" : "");
     }
 
     private RequestAssessment analyzeAndLog(String prompt) {

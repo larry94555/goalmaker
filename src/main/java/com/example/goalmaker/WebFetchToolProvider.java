@@ -69,6 +69,10 @@ public class WebFetchToolProvider {
     }
 
     private String fetch(Map<String, Object> arguments) throws Exception {
+        return mapper.writeValueAsString(fetchPayload(arguments));
+    }
+
+    Map<String, Object> fetchPayload(Map<String, Object> arguments) throws Exception {
         String requested = arguments.get("url") == null ? "" : String.valueOf(arguments.get("url")).trim();
         if (requested.isBlank()) throw new IllegalArgumentException("url is required");
         int maxChars = integer(arguments.get("max_chars"), defaultMaxChars, 1_000, 20_000);
@@ -118,7 +122,7 @@ public class WebFetchToolProvider {
         payload.put("retrieved_at", Instant.now().toString());
         payload.put("truncated", truncated);
         payload.put("content", text);
-        return mapper.writeValueAsString(payload);
+        return payload;
     }
 
     private void validatePublicHttpUrl(URI uri) throws Exception {

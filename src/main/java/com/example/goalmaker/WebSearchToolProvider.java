@@ -77,12 +77,16 @@ public class WebSearchToolProvider {
     }
 
     private String search(Map<String, Object> arguments) throws Exception {
+        return mapper.writeValueAsString(searchPayload(arguments));
+    }
+
+    Map<String, Object> searchPayload(Map<String, Object> arguments) {
         SearchRequest request = SearchRequest.from(arguments);
         CacheEntry cached = cache.get(request.cacheKey());
         if (cached != null && cached.expiresAt().isAfter(Instant.now())) {
             Map<String, Object> payload = new LinkedHashMap<>(cached.payload());
             payload.put("cached", true);
-            return mapper.writeValueAsString(payload);
+            return payload;
         }
 
         List<SearchProvider> providers = providers();
@@ -107,7 +111,7 @@ public class WebSearchToolProvider {
 
         Map<String, Object> payload = payload(request, selectedProvider, attempted, errors, selected);
         if (!selected.isEmpty()) cache(request.cacheKey(), payload);
-        return mapper.writeValueAsString(payload);
+        return payload;
     }
 
     private List<SearchProvider> providers() {

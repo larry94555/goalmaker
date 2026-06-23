@@ -17,23 +17,30 @@ public class ToolCatalog {
     private final McpToolProvider mcp;
     private final WebSearchToolProvider webSearch;
     private final WebFetchToolProvider webFetch;
+    private final WebResearchToolProvider webResearch;
     private final Map<String, ToolDefinition> tools = new LinkedHashMap<>();
 
     @Autowired
     public ToolCatalog(SkillToolProvider skills, McpToolProvider mcp, WebSearchToolProvider webSearch,
-                       WebFetchToolProvider webFetch) {
+                       WebFetchToolProvider webFetch, WebResearchToolProvider webResearch) {
         this.skills = skills;
         this.mcp = mcp;
         this.webSearch = webSearch;
         this.webFetch = webFetch;
+        this.webResearch = webResearch;
+    }
+
+    ToolCatalog(SkillToolProvider skills, McpToolProvider mcp, WebSearchToolProvider webSearch,
+                WebFetchToolProvider webFetch) {
+        this(skills, mcp, webSearch, webFetch, null);
     }
 
     ToolCatalog(SkillToolProvider skills, McpToolProvider mcp) {
-        this(skills, mcp, null, null);
+        this(skills, mcp, null, null, null);
     }
 
     ToolCatalog(SkillToolProvider skills, McpToolProvider mcp, WebSearchToolProvider webSearch) {
-        this(skills, mcp, webSearch, null);
+        this(skills, mcp, webSearch, null, null);
     }
 
     @PostConstruct
@@ -41,6 +48,7 @@ public class ToolCatalog {
         tools.clear();
         if (webSearch != null) webSearch.tools().forEach(this::register);
         if (webFetch != null) webFetch.tools().forEach(this::register);
+        if (webResearch != null) webResearch.tools().forEach(this::register);
         skills.tools().forEach(this::register);
         mcp.tools().forEach(this::register);
         log.info("[tools] exposing {} tool(s) to the model", tools.size());
