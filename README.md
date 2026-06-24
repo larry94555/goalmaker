@@ -293,6 +293,23 @@ Omit `command` to create an instruction-only skill. Calling it returns the Markd
 arguments to the model. Runnable templates are included under `skills/example`; remove the `.example`
 suffixes and move or rename the directory to activate them.
 
+### Bundled Skill Builder And Tool Builder
+
+Two self-extension skills ship under `skills/` and load like any other skill:
+
+- `skills/skill-builder/SKILL.md` (command-backed) researches a topic's best practices with the web tools,
+  then writes a new instruction-only skill at `skills/<name>/SKILL.md` from the synthesized guidance. The
+  model calls it with `skill_name`, `description`, `when_to_use`, and `instructions`.
+- `skills/tool-builder/SKILL.md` (instruction-only) is a human-gated playbook for finding a locally
+  installable tool that better fits a request, getting explicit user approval, installing it through a
+  standard package manager, and registering it as a skill or MCP server. It never installs anything on its
+  own.
+
+Because tools are discovered at startup, a skill or tool produced by these skills becomes available after
+the next restart or catalog reload, not within the same request. Making them usable mid-request, and usable
+while a plan is being prepared, reviewed, or evaluated, is tracked as the phased "Self-extending skills and
+tools" roadmap item.
+
 ### Create A Local MCP Service
 
 Local MCP services use JSON-RPC over standard input/output. Copy `mcp.example.json` to `mcp.json` and configure

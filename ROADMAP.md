@@ -155,3 +155,30 @@ Completion criteria:
 
 Evaluate YaCy or a focused local crawler for private corpora, intranet search, and resilience when public search
 providers are unavailable. Keep it optional because crawling and index maintenance have substantial resource cost.
+
+### 3. Self-extending skills and tools
+
+Two bundled skills already let the model grow GoalMaker's capabilities token-free: `skill-builder` researches a
+topic's best practices and writes a new instruction-only skill, and `tool-builder` is a human-gated playbook for
+adding a locally installable tool and registering it as a skill or MCP server. They load through the existing
+discovery mechanisms, so no change is needed to place or run them. Making the best use of them is the remaining
+work, and it is sequenced into phases because it touches runtime tool exposure, planning-phase tool use, and
+software installation.
+
+- **Phase 1 - dynamic catalog reload.** Add a controlled trigger that re-scans `skills/` and `mcp.json` and
+  refreshes the tool catalog, so a skill or tool built during a session becomes available on the next request
+  without a JVM restart. The catalog and skill providers already support re-scanning; only a guarded trigger and
+  tests are missing.
+- **Phase 2 - mid-request activation.** Re-read the tool specifications inside the model tool loop after a builder
+  skill runs, so a newly created skill or tool can be used later in the same request. Bound the additional
+  iterations and keep activation explicit.
+- **Phase 3 - planning-phase tool use.** Allow the deterministic intermediary to call a small, allowlisted set of
+  tools while preparing, reviewing, subplanning, and evaluating a plan, so best-practice research and tool
+  discovery can inform the plan itself rather than only its execution.
+- **Phase 4 - gated installation.** Optionally let `tool-builder` perform an install through an allowlisted package
+  manager only after explicit, specific user approval, with provenance checks and a reversible record. Until then,
+  installation stays a user-performed step.
+
+Each phase is independently shippable and independently testable. Phase 1 is the recommended next step because it
+unlocks the loop "research, build, reload, use" with the least new surface area and no change to the planner or to
+installation behavior.
