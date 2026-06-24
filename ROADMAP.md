@@ -127,6 +127,19 @@ unwrapping, block detection, and candidate-pool sizing for both DuckDuckGo front
 Tests cover the full chain falling through a failed SearXNG and a blocked HTML endpoint to Lite, Lite result
 parsing and redirect unwrapping, and preserved provider diagnostics.
 
+### Runtime tool catalog reload (self-extension phase 1)
+
+GoalMaker can now re-scan `skills/` and `mcp.json` and rebuild the tool catalog at runtime through
+`POST /admin/tools/reload`, so a skill or tool created during a session, for example by the bundled `skill-builder`
+skill, activates on the next request without restarting the JVM. The skill and MCP providers re-scan from disk;
+MCP servers are stopped and restarted so changed or added servers are picked up without duplicate or stale tools.
+The endpoint returns the new tool count and the names added and removed, re-reads only the trusted local
+directories already loaded at startup, and can be disabled with `tools.admin-reload-enabled=false`. In-flight
+requests keep the tool list they already read, so reloads are visible on the next request rather than mid-request.
+
+Tests cover a skill added after startup becoming a callable tool after reload, reload idempotency, and the
+endpoint result and disabled-state behavior.
+
 ## Next Recommended Change
 
 ### 1. Search quality evaluation and regression gates
@@ -165,10 +178,9 @@ discovery mechanisms, so no change is needed to place or run them. Making the be
 work, and it is sequenced into phases because it touches runtime tool exposure, planning-phase tool use, and
 software installation.
 
-- **Phase 1 - dynamic catalog reload.** Add a controlled trigger that re-scans `skills/` and `mcp.json` and
-  refreshes the tool catalog, so a skill or tool built during a session becomes available on the next request
-  without a JVM restart. The catalog and skill providers already support re-scanning; only a guarded trigger and
-  tests are missing.
+- **Phase 1 - dynamic catalog reload. Done.** `POST /admin/tools/reload` re-scans `skills/` and `mcp.json` and
+  rebuilds the catalog so a skill or tool built during a session becomes available on the next request without a
+  JVM restart. See "Runtime tool catalog reload" under Completed Foundation.
 - **Phase 2 - mid-request activation.** Re-read the tool specifications inside the model tool loop after a builder
   skill runs, so a newly created skill or tool can be used later in the same request. Bound the additional
   iterations and keep activation explicit.
@@ -179,6 +191,6 @@ software installation.
   manager only after explicit, specific user approval, with provenance checks and a reversible record. Until then,
   installation stays a user-performed step.
 
-Each phase is independently shippable and independently testable. Phase 1 is the recommended next step because it
-unlocks the loop "research, build, reload, use" with the least new surface area and no change to the planner or to
-installation behavior.
+Each phase is independently shippable and independently testable. Phase 1 shipped the runtime reload above. Phase 2
+(mid-request activation) is the recommended next step, letting a builder skill's output be used later in the same
+request, still with no change to the planner or to installation behavior.

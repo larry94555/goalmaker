@@ -32,9 +32,11 @@ After a request is clear, the intermediary gives the saved plan to the main mode
 out plan steps through built-in web research, discovered skills, and MCP tools. Classification, clarification,
 and plan-generation calls never receive tools.
 
-Tools are loaded once during application startup. Restart the application after adding or changing a skill,
-an MCP server, or `mcp.json`. Tool calls are bounded by `tools.max-iterations` and each local process call by
-`tools.timeout-seconds` in `application.properties`.
+Tools are loaded during application startup. After adding or changing a skill, an MCP server, or `mcp.json`,
+either restart the application or `POST /admin/tools/reload` to re-scan `skills/` and `mcp.json` and rebuild the
+catalog without a restart (see "Reload Tools At Runtime"). Reloaded tools take effect on the next request. Tool
+calls are bounded by `tools.max-iterations` and each local process call by `tools.timeout-seconds` in
+`application.properties`.
 
 Only install skills and MCP servers you trust. Their commands run locally with the same operating-system
 permissions as goalmaker.
@@ -305,10 +307,24 @@ Two self-extension skills ship under `skills/` and load like any other skill:
   standard package manager, and registering it as a skill or MCP server. It never installs anything on its
   own.
 
-Because tools are discovered at startup, a skill or tool produced by these skills becomes available after
-the next restart or catalog reload, not within the same request. Making them usable mid-request, and usable
-while a plan is being prepared, reviewed, or evaluated, is tracked as the phased "Self-extending skills and
-tools" roadmap item.
+A skill or tool produced by these skills becomes available after a catalog reload (or restart), on the next
+request. Trigger a reload without restarting through `POST /admin/tools/reload` (see "Reload Tools At Runtime").
+Using built tools within the same request, and while a plan is being prepared, reviewed, or evaluated, remains
+tracked as the later phases of the "Self-extending skills and tools" roadmap item.
+
+### Reload Tools At Runtime
+
+`POST /admin/tools/reload` re-scans `skills/` and `mcp.json`, restarts MCP servers, and rebuilds the tool
+catalog so tools added after startup activate on the next request without restarting the JVM:
+
+```bat
+curl.exe -s -X POST http://localhost:8080/admin/tools/reload
+```
+
+The response reports the new tool count and the tool names added and removed, for example
+`{"reloaded":true,"tool_count":4,"added":["skill_rest_api_versioning"],"removed":[]}`. The endpoint re-reads the
+same trusted local directories loaded at startup; set `tools.admin-reload-enabled=false` to disable it in
+untrusted environments.
 
 ### Create A Local MCP Service
 
