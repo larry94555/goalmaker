@@ -376,8 +376,18 @@ ask.bat "Convert this LaTeX file to a Word document; install a suitable local to
 Expected: the model surfaces the Tool Builder procedure, proposes a candidate with its official source and exact
 install command, and asks for explicit approval before any installation. It must never install autonomously.
 
-Activation caveat: a skill or tool created during a session appears only after the next restart or catalog reload.
-This is expected until the "Self-extending skills and tools" roadmap item lands.
+Reload the catalog without restarting, then confirm a newly written skill is exposed:
+
+```bat
+curl.exe -s -X POST http://localhost:8080/admin/tools/reload
+```
+
+Expected: a JSON body such as `{"reloaded":true,"tool_count":4,"added":["skill_sample_topic"],"removed":[]}`. The
+added skill is callable on the next `/prompt` request. With `tools.admin-reload-enabled=false`, the endpoint
+returns HTTP 403.
+
+Activation caveat: a reloaded skill or tool takes effect on the next request, not within the request in flight.
+Using a built tool within the same request remains a later "Self-extending skills and tools" roadmap phase.
 
 ## Automated Tests
 
@@ -458,6 +468,8 @@ This checklist was reviewed against the current web-search implementation and ro
 | Optional managed Compose startup | Managed-startup operation | `SearxngHealthManagerTest`, `WebSearchConfigurationTest` |
 | Live SearXNG and public-provider compatibility | Live command | `WebResearchLiveTest`, `SpecializedSearchLiveTest`, `SearxngHealthLiveTest` |
 | Bundled Skill Builder and Tool Builder discovery and behavior | Skill and tool extension tests | Manual (startup log, writer round-trip, playbook approval gate) |
+| Runtime tool catalog reload activates skills added after startup | Skill and tool extension tests | `ToolReloadTest` |
+| Reload endpoint result and disabled-state guard | Skill and tool extension tests | `ToolReloadTest` |
 
 The prompt suite covers every user-visible web-search capability. Network-sensitive and process-isolation cases
 have deterministic fixtures; Docker enforcement has an opt-in live test. The PDF timeout itself is enforced with

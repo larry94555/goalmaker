@@ -38,6 +38,11 @@ public class SkillToolProvider {
         reload(Path.of(skillsDir));
     }
 
+    /** Re-scans the configured skills directory so files added after startup are picked up. */
+    public synchronized void reload() {
+        reload(Path.of(skillsDir));
+    }
+
     synchronized void reload(Path directory) {
         tools.clear();
         if (!Files.isDirectory(directory)) {

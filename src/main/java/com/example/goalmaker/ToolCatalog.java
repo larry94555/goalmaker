@@ -6,8 +6,10 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Component
 public class ToolCatalog {
@@ -54,6 +56,23 @@ public class ToolCatalog {
         log.info("[tools] exposing {} tool(s) to the model", tools.size());
     }
 
+    /**
+     * Re-scans the skill and MCP providers from disk and rebuilds the catalog so tools created or
+     * installed after startup become available. The new tools take effect on the next request; an
+     * in-flight request keeps the tool list it already read. Returns what changed.
+     */
+    public synchronized ReloadResult reload() {
+        Set<String> before = new LinkedHashSet<>(tools.keySet());
+        if (skills != null) skills.reload();
+        if (mcp != null) mcp.reload();
+        refresh();
+        Set<String> after = tools.keySet();
+        List<String> added = after.stream().filter(name -> !before.contains(name)).toList();
+        List<String> removed = before.stream().filter(name -> !after.contains(name)).toList();
+        log.info("[tools] reload complete: {} tool(s); added={} removed={}", after.size(), added, removed);
+        return new ReloadResult(after.size(), List.copyOf(added), List.copyOf(removed));
+    }
+
     public synchronized boolean isEmpty() {
         return tools.isEmpty();
     }
@@ -95,4 +114,6 @@ public class ToolCatalog {
             log.warn("[tools] duplicate tool name ignored: {}", tool.name());
         }
     }
+
+    public record ReloadResult(int toolCount, List<String> added, List<String> removed) {}
 }

@@ -68,6 +68,17 @@ public class McpToolProvider {
         return List.copyOf(tools);
     }
 
+    /**
+     * Stops the running MCP servers and re-reads the configured config file so servers added or
+     * changed after startup are picked up. {@link #stop()} clears the servers but not their tools,
+     * so the tool list is cleared here before restarting to avoid duplicate or stale entries.
+     */
+    public synchronized void reload() {
+        stop();
+        tools.clear();
+        start(Path.of(configFile));
+    }
+
     @SuppressWarnings("unchecked")
     private void startServer(String name, Map<String, Object> config, Path configDirectory) {
         try {
