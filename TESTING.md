@@ -345,6 +345,40 @@ worker; a clean replacement successfully handles the request immediately followi
 Expected: tests pass for shared robots/redirect request exhaustion, slow streaming termination, decompressed-size
 limits, redirect loops, private targets, unapproved ports, pinned DNS, PDF limits, and isolated-worker execution.
 
+## Skill And Tool Extension Tests
+
+These verify the bundled self-extension skills discover, register, and behave as documented. They are manual
+because the skill writer runs PowerShell and activation requires a catalog reload, which is a roadmap item.
+
+Confirm both skills register at startup. After launching GoalMaker, the log should contain:
+
+```text
+[skills] skills\skill-builder\SKILL.md -> tool skill_skill-builder
+[skills] skills\tool-builder\SKILL.md -> tool skill_tool-builder
+```
+
+Exercise the Skill Builder writer directly and confirm it produces a loadable skill:
+
+```bat
+echo {"skill_name":"Sample Topic","description":"Sample best practices.","when_to_use":"Reviewing a plan.","instructions":"- Follow the guidance per https://example.com"} | powershell -NoProfile -ExecutionPolicy Bypass -File skills\skill-builder\build-skill.ps1
+```
+
+Expected: a non-zero-free run that prints `Created skill 'sample-topic' at skills/sample-topic/SKILL.md`, the file
+begins with `---` (no byte-order mark), and its front matter parses. Re-running without `overwrite=true` returns a
+name-collision error and a non-zero exit code. Remove `skills/sample-topic` afterward.
+
+Exercise the Tool Builder playbook with an information request that may need a specialized local tool:
+
+```bat
+ask.bat "Convert this LaTeX file to a Word document; install a suitable local tool if one is clearly better."
+```
+
+Expected: the model surfaces the Tool Builder procedure, proposes a candidate with its official source and exact
+install command, and asks for explicit approval before any installation. It must never install autonomously.
+
+Activation caveat: a skill or tool created during a session appears only after the next restart or catalog reload.
+This is expected until the "Self-extending skills and tools" roadmap item lands.
+
 ## Automated Tests
 
 Run the complete deterministic suite. It makes no public-network calls:
@@ -423,6 +457,7 @@ This checklist was reviewed against the current web-search implementation and ro
 | Health states, metrics, circuit breaker, recovery | Outage test | `SearxngHealthManagerTest`, `WebSearchHealthControllerTest` |
 | Optional managed Compose startup | Managed-startup operation | `SearxngHealthManagerTest`, `WebSearchConfigurationTest` |
 | Live SearXNG and public-provider compatibility | Live command | `WebResearchLiveTest`, `SpecializedSearchLiveTest`, `SearxngHealthLiveTest` |
+| Bundled Skill Builder and Tool Builder discovery and behavior | Skill and tool extension tests | Manual (startup log, writer round-trip, playbook approval gate) |
 
 The prompt suite covers every user-visible web-search capability. Network-sensitive and process-isolation cases
 have deterministic fixtures; Docker enforcement has an opt-in live test. The PDF timeout itself is enforced with
